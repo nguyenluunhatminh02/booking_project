@@ -1,0 +1,168 @@
+// ===========================
+// Generators / Datasource
+// ===========================
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ===========================
+// Enums
+// ===========================
+enum ScopeType {
+  GLOBAL
+  ORGANIZATION
+  RESOURCE
+}
+
+enum ACLEffect {
+  ALLOW
+  DENY
+}
+
+// ===========================
+// Core: Users & Auth
+// ===========================
+model User {
+  id         String        @id @default(uuid())
+  email      String        @unique
+  password   String
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+
+  // Relations
+  sessions   UserSession[]
+  auditLogs  AuditLog[]    @relation("AuditActor")
+
+  // RBAC
+  userRoles  UserRole[]
+  acls       ResourceACL[]
+
+  @@map("users")
+}
+
+model UserSession {
+  id            String    @id @default(uuid())     // session id
+  userId        String
+  deviceId      String?
+  refreshHash   String
+  tokenVersion  Int       @default(0)
+  expiresAt     DateTime
+  createdAt     DateTime  @default(now())
+  revokedAt     DateTime?
+
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@unique([userId, deviceId])                     // 1 user - 1 device chỉ 1 phiên active
+  @@map("user_sessions")
+}
+
+model AuditLog {
+  id         String    @id @default(uuid())
+
+  // Actor (có thể null nếu hệ thống)
+  actorId    String?
+  actor      User?     @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+  actorRole  String?   // snapshot role string tại thời điểm hành động (tùy chọn)
+
+  action     String                // "CREATE" | "UPDATE" | "DELETE" | ...
+  entity     String                // "Booking" | "Property" | ...
+  entityId   String
+  diff       Json?
+  meta       Json?                 // ip, ua, requestId, path...
+  prevHash   String?
+  hash       String                // SHA-256(action+entity+...+prevHash+ts)
+  createdAt  DateTime  @default(now())
+
+  @@unique([hash])                 // chống ghi đúp/sửa log
+  @@index([entity, entityId, createdAt])
+  @@map("audit_logs")
+}
+
+// ===========================
+// RBAC: Role / Permission / Mapping
+// ===========================
+model Role {
+  id         String           @id @default(uuid())
+  name       String           @unique            // "ADMIN", "HOST", "CUSTOMER", "ORG_ADMIN", ...
+  desc       String?
+  isSystem   Boolean          @default(false)    // seed mặc định (hard role)
+  createdAt  DateTime         @default(now())
+
+  rolePerms  RolePermission[]
+  userRoles  UserRole[]
+
+  @@map("roles")
+}
+
+// Permission = (action, subject)
+//   action: "create" | "read" | "update" | "delete" | "manage" ...
+//   subject: "User" | "Property" | "Booking" | "*" ...
+model Permission {
+  id         String     @id @default(uuid())
+  action     String
+  subject    String
+  desc       String?
+
+  rolePerms  RolePermission[]
+
+  @@unique([action, subject])      // không trùng logic quyền
+  @@map("permissions")
+}
+
+model RolePermission {
+  // composite key thay id
+  roleId        String
+  permissionId  String
+  createdAt     DateTime @default(now())
+
+  role       Role        @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission  @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+// Gán role cho user, có thể theo scope (đa tổ chức / đa resource)
+model UserRole {
+  id          String     @id @default(uuid())
+  userId      String
+  roleId      String
+
+  // Scope tuỳ chọn
+  scopeType   ScopeType? // GLOBAL | ORGANIZATION | RESOURCE
+  scopeId     String?    // ví dụ orgId hoặc resourceId
+
+  effectiveAt DateTime?  // thời điểm có hiệu lực
+  expiresAt   DateTime?  // hết hạn
+
+  user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role        Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@index([userId, roleId])
+  @@index([scopeType, scopeId])
+  @@map("user_roles")
+}
+
+// ACL cấp instance (row-level) cho tài nguyên cụ thể
+model ResourceACL {
+  id           String     @id @default(uuid())
+  userId       String
+  resourceType String      // "Property" | "Booking" | ...
+  resourceId   String
+  action       String      // "read" | "update" | ...
+  effect       ACLEffect   // ALLOW | DENY
+  createdAt    DateTime    @default(now())
+
+  user         User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, resourceType, resourceId, action]) // tránh trùng
+  @@index([resourceType, resourceId])
+  @@map("resource_acl")
+}

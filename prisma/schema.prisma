@@ -10,159 +10,247 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// ===========================
-// Enums
-// ===========================
-enum ScopeType {
-  GLOBAL
-  ORGANIZATION
-  RESOURCE
+// ---------- Enums ----------
+enum ACLEffect { 
+  ALLOW 
+  DENY 
 }
 
-enum ACLEffect {
-  ALLOW
-  DENY
+enum SessionRevokeReason { 
+  USER_LOGOUT 
+  ADMIN_FORCE 
+  SECURITY_REUSE 
+  EXPIRED 
+  OTHER 
 }
 
-// ===========================
-// Core: Users & Auth
-// ===========================
+enum SecurityEventType { 
+  LOGIN_SUCCESS 
+  LOGIN_FAILED 
+  TOKEN_REVOKE 
+  REFRESH_REUSE 
+}
+
+enum BookingStatus { 
+  PENDING 
+  CONFIRMED 
+  CANCELED 
+}
+enum UserTokenType { 
+  EMAIL_VERIFY 
+  PASSWORD_RESET 
+  DEVICE_APPROVAL 
+}
+
+// ---------- Core: Users & Sessions ----------
 model User {
-  id         String        @id @default(uuid())
-  email      String        @unique
-  password   String
-  createdAt  DateTime      @default(now())
-  updatedAt  DateTime      @updatedAt
+  id            String   @id @default(uuid())
+  email         String   @unique @db.Citext
+  password      String
+  accessVersion Int      @default(1)     // bump ⇒ invalidate all access tokens
+  lockedUntil   DateTime?
 
-  // Relations
-  sessions   UserSession[]
-  auditLogs  AuditLog[]    @relation("AuditActor")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  // RBAC
-  userRoles  UserRole[]
-  acls       ResourceACL[]
+  // relations
+  sessions        UserSession[]
+  roles           UserRole[]
+  securityEvents  SecurityEvent[]
+  auditLogs       AuditLog[]
+  properties      Property[]   @relation("PropertyOwner")
+  bookings        Booking[]
+  tokens          UserToken[]
 
   @@map("users")
+  ResourceACL ResourceACL[]
 }
 
 model UserSession {
-  id            String    @id @default(uuid())     // session id
-  userId        String
-  deviceId      String?
-  refreshHash   String
-  tokenVersion  Int       @default(0)
-  expiresAt     DateTime
-  createdAt     DateTime  @default(now())
-  revokedAt     DateTime?
+  id              String   @id @default(uuid())
+  userId          String
+  deviceId        String?
+  refreshHash     String
+  tokenVersion    Int      @default(0)
+  expiresAt       DateTime
+  revokedAt       DateTime?
+  revokedReason   SessionRevokeReason?
 
-  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // observability / forensics
+  ip              String?  // prefer @db.Inet if supported by your Prisma
+  userAgent       String?
+  lastUsedAt      DateTime?
+  rotatedAt       DateTime?
+  reusedAt        DateTime?
+
+  // rotate grace window
+  prevRefreshHash String?
+  prevExpiresAt   DateTime?
+
+  createdAt       DateTime @default(now())
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  securityEvents  SecurityEvent[]
 
   @@index([userId])
   @@index([expiresAt])
-  @@unique([userId, deviceId])                     // 1 user - 1 device chỉ 1 phiên active
+  @@index([userId, revokedAt])
   @@map("user_sessions")
 }
 
-model AuditLog {
-  id         String    @id @default(uuid())
-
-  // Actor (có thể null nếu hệ thống)
-  actorId    String?
-  actor      User?     @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
-  actorRole  String?   // snapshot role string tại thời điểm hành động (tùy chọn)
-
-  action     String                // "CREATE" | "UPDATE" | "DELETE" | ...
-  entity     String                // "Booking" | "Property" | ...
-  entityId   String
-  diff       Json?
-  meta       Json?                 // ip, ua, requestId, path...
-  prevHash   String?
-  hash       String                // SHA-256(action+entity+...+prevHash+ts)
-  createdAt  DateTime  @default(now())
-
-  @@unique([hash])                 // chống ghi đúp/sửa log
-  @@index([entity, entityId, createdAt])
-  @@map("audit_logs")
-}
-
-// ===========================
-// RBAC: Role / Permission / Mapping
-// ===========================
+// ---------- RBAC (single-tenant, no scope) ----------
 model Role {
-  id         String           @id @default(uuid())
-  name       String           @unique            // "ADMIN", "HOST", "CUSTOMER", "ORG_ADMIN", ...
-  desc       String?
-  isSystem   Boolean          @default(false)    // seed mặc định (hard role)
-  createdAt  DateTime         @default(now())
+  id        String   @id @default(uuid())
+  name      String   @unique
+  desc      String?
+  isSystem  Boolean  @default(false)
+  createdAt DateTime @default(now())
 
-  rolePerms  RolePermission[]
-  userRoles  UserRole[]
+  rolePerms RolePermission[]
+  userRoles UserRole[]
 
   @@map("roles")
 }
 
-// Permission = (action, subject)
-//   action: "create" | "read" | "update" | "delete" | "manage" ...
-//   subject: "User" | "Property" | "Booking" | "*" ...
 model Permission {
-  id         String     @id @default(uuid())
-  action     String
-  subject    String
-  desc       String?
+  id        String   @id @default(uuid())
+  action    String                 // e.g. read, create, update, delete
+  subject   String                 // e.g. Property, Booking, SecurityEvent, ...
+  desc      String?
+  createdAt DateTime @default(now())
 
-  rolePerms  RolePermission[]
+  rolePerms RolePermission[]
 
-  @@unique([action, subject])      // không trùng logic quyền
+  @@unique([action, subject], name: "action_subject")
   @@map("permissions")
 }
 
 model RolePermission {
-  // composite key thay id
-  roleId        String
-  permissionId  String
-  createdAt     DateTime @default(now())
+  roleId       String
+  permissionId String
+  createdAt    DateTime @default(now())
 
-  role       Role        @relation(fields: [roleId], references: [id], onDelete: Cascade)
-  permission Permission  @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  role        Role        @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission  Permission  @relation(fields: [permissionId], references: [id], onDelete: Cascade)
 
   @@id([roleId, permissionId])
   @@map("role_permissions")
 }
 
-// Gán role cho user, có thể theo scope (đa tổ chức / đa resource)
 model UserRole {
-  id          String     @id @default(uuid())
+  id          String    @id @default(uuid())
   userId      String
   roleId      String
+  effectiveAt DateTime?
+  expiresAt   DateTime?
 
-  // Scope tuỳ chọn
-  scopeType   ScopeType? // GLOBAL | ORGANIZATION | RESOURCE
-  scopeId     String?    // ví dụ orgId hoặc resourceId
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
 
-  effectiveAt DateTime?  // thời điểm có hiệu lực
-  expiresAt   DateTime?  // hết hạn
-
-  user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  role        Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
-
-  @@index([userId, roleId])
-  @@index([scopeType, scopeId])
+  @@unique([userId, roleId], name: "user_role_unique")
   @@map("user_roles")
 }
 
-// ACL cấp instance (row-level) cho tài nguyên cụ thể
+// ---------- Instance-level ACL (tuỳ chọn cho ngoại lệ) ----------
 model ResourceACL {
-  id           String     @id @default(uuid())
+  id           String    @id @default(uuid())
   userId       String
-  resourceType String      // "Property" | "Booking" | ...
+  resourceType String    // e.g. Property, Booking
   resourceId   String
-  action       String      // "read" | "update" | ...
-  effect       ACLEffect   // ALLOW | DENY
-  createdAt    DateTime    @default(now())
+  action       String    // e.g. read, update, delete
+  effect       ACLEffect @default(ALLOW)
+  createdAt    DateTime  @default(now())
 
-  user         User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@unique([userId, resourceType, resourceId, action]) // tránh trùng
+  @@unique([userId, resourceType, resourceId, action], name: "user_resource_action_unique")
   @@index([resourceType, resourceId])
   @@map("resource_acl")
+}
+
+// ---------- Audit & Security ----------
+model SecurityEvent {
+  id        String            @id @default(uuid())
+  userId    String?                             // nullable cho LOGIN_FAILED chưa định danh
+  sessionId String?
+  type      SecurityEventType
+  ip        String?
+  userAgent String?
+  meta      Json?
+  createdAt DateTime          @default(now())
+
+  user    User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+  session UserSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([userId, type, createdAt])
+  @@index([sessionId])
+  @@map("security_events")
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  actorId   String?
+  action    String
+  entity    String
+  entityId  String?
+  meta      Json?
+  createdAt DateTime @default(now())
+
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([entity, entityId, createdAt])
+  @@map("audit_logs")
+}
+
+// ---------- Domain ----------
+model Property {
+  id          String    @id @default(uuid())
+  title       String
+  description String?
+  ownerId     String
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  owner     User      @relation("PropertyOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  bookings  Booking[]
+
+  @@index([ownerId])
+  @@map("properties")
+}
+
+model Booking {
+  id          String        @id @default(uuid())
+  propertyId  String
+  userId      String
+  status      BookingStatus @default(PENDING)
+
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([propertyId])
+  @@index([userId])
+  @@map("bookings")
+}
+
+// ---------- One-time Tokens ----------
+model UserToken {
+  id        String        @id @default(uuid())
+  userId    String?
+  type      UserTokenType
+  tokenHash String        // store hash only (no plaintext)
+  meta      Json?
+  createdAt DateTime      @default(now())
+  expiresAt DateTime
+  usedAt    DateTime?
+  usedByIp  String?
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([type, expiresAt])
+  @@index([userId, type, createdAt])
+  @@map("user_tokens")
 }

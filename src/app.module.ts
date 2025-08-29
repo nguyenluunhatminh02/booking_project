@@ -7,9 +7,10 @@ import { APP_GUARD } from '@nestjs/core';
 import { RateLimitGuard } from './common/guards/rate-limit.guard';
 import { TokenBucketService } from './common/token-bucket.service';
 import { RedisService } from './common/redis.service';
+import { SecurityModule } from './modules/security/security.module';
 
 @Module({
-  imports: [PrismaModule, AuthModule],
+  imports: [PrismaModule, AuthModule, SecurityModule],
   controllers: [AppController],
   providers: [
     AppService,

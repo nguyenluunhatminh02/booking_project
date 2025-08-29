@@ -9,6 +9,7 @@ import { TokenBucketService } from 'src/common/token-bucket.service';
 import { TokenStateService } from './token-state.service';
 import { JwtAccessStrategy } from './strategy/jwt.strategy';
 import { JwtAuthGuard } from './guards/jwt.guard';
+import { SecurityEventsService } from '../security/security-events.service';
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { JwtAuthGuard } from './guards/jwt.guard';
     RedisService,
     TokenBucketService,
     TokenStateService,
+    SecurityEventsService,
   ],
   exports: [JwtAuthGuard, JwtAccessStrategy],
 })

@@ -28,6 +28,7 @@ import {
 } from './utils/password';
 
 import { to429 } from 'src/common/errors/app.exception';
+import { SecurityEventsService } from '../security/security-events.service';
 
 // ===================
 // Constants / Policy
@@ -67,6 +68,7 @@ export class AuthService {
     private readonly redis: RedisService,
     private readonly tokenState: TokenStateService,
     private readonly tb: TokenBucketService,
+    private readonly sec: SecurityEventsService,
   ) {}
 
   // ================
@@ -330,6 +332,9 @@ export class AuthService {
         }
       }
 
+      // LOGIN FAILED
+      await this.sec.loginFailed(user?.id, ctx, { email: normEmail });
+
       throw new UnauthorizedException('Invalid credentials');
     }
 
@@ -344,9 +349,10 @@ export class AuthService {
 
     // Issue tokens
     const { token: accessToken, exp } = await this.signAccessToken(user);
-    const { refreshToken, refreshExpiresAt } =
+    const { refreshToken, refreshExpiresAt, sessionId } =
       await this.createSessionAndRefreshToken(user.id, deviceId);
-
+    // LOGIN SUCCESS
+    await this.sec.loginSuccess(user.id, sessionId, ctx, { deviceId });
     return {
       accessToken,
       accessTokenExpiresIn: this.accessTtlSec,
@@ -449,6 +455,15 @@ export class AuthService {
 
     // (best-effort) log REFRESH_REUSE nếu có service log
     // await this.sec?.log({ userId: session.userId, sessionId, type: 'REFRESH_REUSE', ctx, meta: { note: 'reuse detected' } }).catch(() => {});
+    try {
+      if (this.sec) {
+        await this.sec.refreshReuse(session.userId, sessionId, ctx, {
+          note: 'reuse detected',
+        });
+      }
+    } catch {
+      /* empty */
+    }
 
     throw new UnauthorizedException('Invalid refresh token');
   }
@@ -532,8 +547,9 @@ export class AuthService {
       );
 
       // (best-effort) log TOKEN_REVOKE nếu có
-      // await this.sec?.log({ userId, type: 'TOKEN_REVOKE', meta: { jti } }).catch(() => {});
-
+      if (userId) {
+        await this.sec.tokenRevoke(userId, undefined, { jti });
+      }
       return { ok: true };
     } catch {
       return { ok: false, reason: 'verify-failed' };

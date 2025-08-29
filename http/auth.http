@@ -1,0 +1,148 @@
+### ======================
+### ENV & DEFAULTS
+### ======================
+@baseUrl = http://localhost:3000
+@accessToken = acb
+@refreshToken = acb
+@json = application/json
+# sinh email duy nhất theo timestamp
+@email = userdangcap@example.com
+@password = StrongPass123!
+@deviceId = chrome-123
+
+### ======================
+### REGISTER
+### ======================
+# @name register
+POST {{baseUrl}}/auth/register
+Content-Type: {{json}}
+
+{
+  "email": "{{email}}",
+  "password": "{{password}}"
+}
+
+# > {% 
+#   const body = JSON.parse(response.body);
+#   client.global.set("accessToken", body.accessToken);
+#   client.global.set("accessTokenExpSec", body.accessTokenExpSec ?? "");
+#   client.global.set("refreshToken", body.refreshToken);
+#   client.global.set("userId", body.user.id);
+# %}
+
+### Quick check saved vars
+GET {{baseUrl}}/ping
+Authorization: Bearer {{accessToken}}
+
+### ======================
+### LOGIN (same account)
+### ======================
+# @name login
+POST {{baseUrl}}/auth/login
+Content-Type: {{json}}
+
+{
+  "email": "{{email}}",
+  "password": "{{password}}",
+  "deviceId": "{{deviceId}}"
+}
+
+# > {% 
+#   const body = JSON.parse(response.body);
+#   client.global.set("accessToken", body.accessToken);
+#   client.global.set("accessTokenExpSec", body.accessTokenExpSec ?? "");
+#   client.global.set("refreshToken", body.refreshToken);
+# %}
+
+### ======================
+### REFRESH (get new AT/RT)
+### ======================
+# @name refresh
+POST {{baseUrl}}/auth/refresh
+Content-Type: {{json}}
+
+{
+  "refreshToken": "{{refreshToken}}"
+}
+
+> {% 
+  const body = JSON.parse(response.body);
+  client.global.set("accessToken", body.accessToken);
+  client.global.set("accessTokenExpSec", body.accessTokenExpSec ?? "");
+  client.global.set("refreshToken", body.refreshToken);
+%}
+
+### ======================
+### LOGOUT (by refresh token)
+### ======================
+# @name logout
+POST {{baseUrl}}/auth/logout
+Content-Type: {{json}}
+
+{
+  "refreshToken": "{{refreshToken}}"
+}
+
+### ======================
+### LOGOUT ALL (Bearer required)
+### ======================
+# Yêu cầu đã đăng nhập (Authorization: Bearer)
+# Nếu bạn dùng @CurrentUserId qua JwtAuthGuard trong controller,
+# chỉ cần header Authorization — không cần body userId.
+# @name logoutAll
+POST {{baseUrl}}/auth/logout-all
+Content-Type: {{json}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "keepSessionId": null
+}
+
+### ======================
+### REVOKE ACCESS TOKEN (denylist current AT)
+### ======================
+# @name revokeAccess
+POST {{baseUrl}}/auth/revoke-access
+Content-Type: {{json}}
+
+{
+  "accessToken": "{{accessToken}}"
+}
+
+### ======================
+### NEGATIVE: WRONG PASSWORD
+### ======================
+# @name loginWrongPassword
+POST {{baseUrl}}/auth/login
+Content-Type: {{json}}
+
+{
+  "email": "{{email}}",
+  "password": "WrongPass!!"
+}
+
+### ======================
+### NEGATIVE: REFRESH WITH OLD TOKEN (after refresh)
+### (Run REFRESH above first to rotate, then try this with the old {{refreshToken}} saved before rotation)
+### ======================
+# Manually paste an older refresh token here to test reuse/grace behavior
+# @name refreshOld
+POST {{baseUrl}}/auth/refresh
+Content-Type: {{json}}
+
+{
+  "refreshToken": "PASTE_OLD_REFRESH_TOKEN_HERE"
+}
+
+### ======================
+### STRESS: RATE LIMIT DEMO (register same email repeatedly)
+### (Run several times quickly to trigger 429)
+### ======================
+# @name registerRateLimit
+POST {{baseUrl}}/auth/register
+Content-Type: {{json}}
+
+{
+  "email": "{{email}}",
+  "password": "{{password}}"
+}

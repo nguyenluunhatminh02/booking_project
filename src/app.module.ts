@@ -8,9 +8,10 @@ import { RateLimitGuard } from './common/guards/rate-limit.guard';
 import { TokenBucketService } from './common/token-bucket.service';
 import { RedisService } from './common/redis.service';
 import { SecurityModule } from './modules/security/security.module';
+import { RbacModule } from './modules/rbac/rbac.module';
 
 @Module({
-  imports: [PrismaModule, AuthModule, SecurityModule],
+  imports: [PrismaModule, AuthModule, SecurityModule, RbacModule],
   controllers: [AppController],
   providers: [
     AppService,

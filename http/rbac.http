@@ -1,0 +1,155 @@
+@base = http://localhost:3000
+@json = application/json
+
+# Dán access token của admin (có quyền Role.manage / Permission.manage)
+@adminToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdiI6MSwiaWF0IjoxNzU2NTY5MTM2LCJleHAiOjE3NTY1NzAwMzYsImF1ZCI6ImJvb2tpbmctZmUiLCJpc3MiOiJib29raW5nLWFwaSIsInN1YiI6ImU0MTA0ZjRjLTc4M2ItNDg3OS1iMzY1LWNkMjJhZmY3MWYwZSIsImp0aSI6IjljZDMwZjliLWU0NmYtNDUzNS1iOGIxLTJmMGQ0ZGUzMWQ1ZiJ9.mo_IDEmLvfgciiYUKHrXZ4htVwy9XTmk1TMlHE9UbcY"
+
+# Dán access token của user thường để test (không cần quyền admin)
+@userToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdiI6MSwiaWF0IjoxNzU2NTY5MTkwLCJleHAiOjE3NTY1NzAwOTAsImF1ZCI6ImJvb2tpbmctZmUiLCJpc3MiOiJib29raW5nLWFwaSIsInN1YiI6Ijk5MjQxZTVjLTRjYTQtNDg0YS04MDAyLTU4ZTdlNjc5MTBkYyIsImp0aSI6IjJlYjU1M2VkLTFhZTUtNGUxMS1iY2QwLTc3YWJkYjE1NWRiMyJ9.HYZEqMLsacm4mQCEZveED5SS-IHNZTX4YQwTLxvRbWM"
+
+# IDs mẫu (điền đúng theo DB của bạn)
+@userId = "99241e5c-4ca4-484a-8002-58e7e67910dc"
+@roleIdAdmin = {{ROLE_ID_ADMIN}}
+@roleIdEditor = {{ROLE_ID_EDITOR}}
+@roleIdViewer = {{ROLE_ID_VIEWER}}
+@resourceId = {{PROPERTY_ID}}  # id bản ghi Property để test ACL
+
+
+### =======================
+### (TUỲ CHỌN) SEED RBAC NHẸ
+### =======================
+# Nếu bạn có sẵn endpoint seed (hoặc chạy prisma/seed.rbac.ts bằng script npm)
+# POST {{base}}/admin/seed/rbac
+# Authorization: Bearer {{adminToken}}
+
+
+### =======================
+### ROLE ↔ USER
+### =======================
+
+### Gán role EDITOR cho user
+POST {{base}}/admin/rbac/add-role
+Authorization: Bearer {{adminToken}}
+Content-Type: {{json}}
+
+{
+  "userId": "{{userId}}",
+  "roleId": "{{roleIdEditor}}"
+}
+
+### Bỏ role EDITOR khỏi user
+POST {{base}}/admin/rbac/remove-role
+Authorization: Bearer {{adminToken}}
+Content-Type: {{json}}
+
+{
+  "userId": "{{userId}}",
+  "roleId": "{{roleIdEditor}}"
+}
+
+
+### =======================
+### ROLE ↔ PERMISSION (type-safe ở backend; HTTP body vẫn là string)
+### =======================
+
+### Thêm quyền Property:read vào role EDITOR
+POST {{base}}/admin/rbac/role/add-permission
+Authorization: Bearer {{adminToken}}
+Content-Type: {{json}}
+
+{
+  "roleId": "{{roleIdEditor}}",
+  "subject": "Property",
+  "action": "read"
+}
+
+### Thêm quyền Property:update vào role EDITOR
+POST {{base}}/admin/rbac/role/add-permission
+Authorization: Bearer {{adminToken}}
+Content-Type: {{json}}
+
+{
+  "roleId": "{{roleIdEditor}}",
+  "subject": "Property",
+  "action": "update"
+}
+
+### Bỏ quyền Property:update khỏi role EDITOR
+POST {{base}}/admin/rbac/role/remove-permission
+Authorization: Bearer {{adminToken}}
+Content-Type: {{json}}
+
+{
+  "roleId": "{{roleIdEditor}}",
+  "subject": "Property",
+  "action": "update"
+}
+
+
+### =======================
+### ACL THEO BẢN GHI (ALLOW / DENY)
+### =======================
+
+### Cấp ALLOW: cho user được delete bản ghi Property cụ thể
+POST {{base}}/admin/rbac/grant-acl
+Authorization: Bearer {{adminToken}}
+Content-Type: {{json}}
+
+{
+  "userId": "{{userId}}",
+  "resourceType": "Property",
+  "resourceId": "{{resourceId}}",
+  "action": "delete",
+  "effect": "ALLOW"
+}
+
+### Cấp DENY: chặn user update bản ghi Property cụ thể
+POST {{base}}/admin/rbac/grant-acl
+Authorization: Bearer {{adminToken}}
+Content-Type: {{json}}
+
+{
+  "userId": "{{userId}}",
+  "resourceType": "Property",
+  "resourceId": "{{resourceId}}",
+  "action": "update",
+  "effect": "DENY"
+}
+
+### Thu hồi ACL (xóa rule) — ví dụ bỏ DENY update
+POST {{base}}/admin/rbac/revoke-acl
+Authorization: Bearer {{adminToken}}
+Content-Type: {{json}}
+
+{
+  "userId": "{{userId}}",
+  "resourceType": "Property",
+  "resourceId": "{{resourceId}}",
+  "action": "update"
+}
+
+
+### =======================
+### BUSINESS ENDPOINTS — TEST QUYỀN
+### =======================
+
+### (User) Đọc property — cần Property:read (hoặc Property:manage / manage:*)
+GET {{base}}/properties/{{resourceId}}
+Authorization: Bearer {{userToken}}
+
+### (User) Sửa property — cần Property:update (hoặc Property:manage / manage:*)
+PATCH {{base}}/properties/{{resourceId}}
+Authorization: Bearer {{userToken}}
+Content-Type: {{json}}
+
+{
+  "title": "New title"
+}
+
+
+### =======================
+### GỢI Ý DEBUG (TUỲ CHỌN)
+### =======================
+# Nếu bạn có endpoint debug để xem perms mở rộng của user
+# GET {{base}}/admin/rbac/debug/perms?userId={{userId}}
+# Authorization: Bearer {{adminToken}}

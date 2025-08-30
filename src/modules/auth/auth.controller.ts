@@ -4,6 +4,7 @@ import {
   Controller,
   HttpCode,
   HttpStatus,
+  Patch,
   Post,
   Req,
   Res,
@@ -22,9 +23,20 @@ import {
 } from 'class-validator';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './guards/jwt.guard';
-import { CurrentUserId } from 'src/common/decorators/current-user.decorator';
+import {
+  CurrentUser,
+  CurrentUserId,
+} from 'src/common/decorators/current-user.decorator';
 // import { RateLimit } from 'src/common/decorators/rate-limit.decorator';
 import { REFRESH_COOKIE_NAME, refreshCookieOptions } from './cookie-options';
+import { RequireRole } from '../rbac/decorators/role.decorator';
+import { Public } from 'src/common/decorators/public.decorator';
+import {
+  RequireAnyPermissions,
+  RequirePermissions,
+  Resource,
+} from '../rbac/decorators/permissions.decorator';
+import { P, R } from '../rbac/perms';
 
 // =====================
 // DTOs
@@ -107,6 +119,7 @@ export class AuthController {
   }
 
   @Post('login')
+  @Public()
   async login(
     @Body() dto: LoginDto,
     @Req() req: Request,
@@ -141,6 +154,9 @@ export class AuthController {
   }
 
   @Post('logout')
+  //   @RequireRole('admin')
+  @RequirePermissions(P.User.update)
+  @Resource(R.Property.params('id'))
   @HttpCode(200)
   async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const rt = req.cookies?.[REFRESH_COOKIE_NAME];
@@ -173,4 +189,10 @@ export class AuthController {
   async revokeAccess(@Body() dto: RevokeAccessDto) {
     return this.auth.revokeAccessToken(dto.accessToken);
   }
+
+  //   @Patch('me')
+  //   @RequireAnyPermissions(P.User.update, P.User.manage) // hoặc chỉ cần JWT
+  //   updateMe(@CurrentUser() me: { id: string }, @Body() dto: UpdateProfileDto) {
+  //     return this.users.update(me.id, dto);
+  //   }
 }

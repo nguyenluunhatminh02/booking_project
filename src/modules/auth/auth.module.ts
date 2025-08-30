@@ -10,9 +10,12 @@ import { TokenStateService } from './token-state.service';
 import { JwtAccessStrategy } from './strategy/jwt.strategy';
 import { JwtAuthGuard } from './guards/jwt.guard';
 import { SecurityEventsService } from '../security/security-events.service';
+import { PassportModule } from '@nestjs/passport';
+import { APP_GUARD } from '@nestjs/core';
 
 @Module({
   imports: [
+    PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.register({
       secret: process.env.JWT_ACCESS_SECRET || 'dev-access',
       signOptions: {
@@ -32,6 +35,7 @@ import { SecurityEventsService } from '../security/security-events.service';
     TokenBucketService,
     TokenStateService,
     SecurityEventsService,
+    { provide: APP_GUARD, useClass: JwtAuthGuard },
   ],
   exports: [JwtAuthGuard, JwtAccessStrategy],
 })

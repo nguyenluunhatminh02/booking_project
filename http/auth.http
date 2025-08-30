@@ -3,6 +3,9 @@
 @email = userdangcap@example.com
 @password = StrongPass123!
 @deviceId = chrome-123
+@email1 = userdangcap1@example.com
+@password1 = StrongPass123!
+@deviceId = chrome-123
 
 ### ===== BODY MODE (refreshToken trong body) =====
 
@@ -11,8 +14,8 @@ POST {{baseUrl}}/auth/register
 Content-Type: {{json}}
 
 {
-  "email": "{{email}}",
-  "password": "{{password}}"
+  "email": "{{email1}}",
+  "password": "{{password1}}"
 }
 
 ### Login (BODY) -> copy accessToken, refreshToken từ response
@@ -58,8 +61,8 @@ POST {{baseUrl}}/auth/login
 Content-Type: {{json}}
 
 {
-  "email": "{{email}}",
-  "password": "{{password}}",
+  "email": "{{email1}}",
+  "password": "{{password1}}",
   "deviceId": "{{deviceId}}"
 }
 
@@ -78,6 +81,8 @@ Cookie: rt=PASTE_RT_COOKIE_VALUE
 
 ### Logout (COOKIE) -> server clear cookie
 POST {{baseUrl}}/auth/logout
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdiI6MSwiaWF0IjoxNzU2NTc0MjA4LCJleHAiOjE3NTY1NzUxMDgsImF1ZCI6ImJvb2tpbmctZmUiLCJpc3MiOiJib29raW5nLWFwaSIsInN1YiI6Ijk5MjQxZTVjLTRjYTQtNDg0YS04MDAyLTU4ZTdlNjc5MTBkYyIsImp0aSI6IjI1ODEwNWIwLWRmNmYtNDMzNi1hNmNjLTA5ZTk0NTE1MGRlMiJ9.oToAWA_2YtPGXC40tpn1BcM7LKcwvRfqt2pLlrlEk9E
 Content-Type: {{json}}
+
 
 {}

@@ -6,11 +6,13 @@ import {
   HttpStatus,
   Post,
   Req,
+  Res,
+  UnauthorizedException,
   UseGuards,
   UsePipes,
   ValidationPipe,
 } from '@nestjs/common';
-import { Request } from 'express';
+import { Request, Response } from 'express';
 import {
   IsEmail,
   IsNotEmpty,
@@ -21,7 +23,8 @@ import {
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './guards/jwt.guard';
 import { CurrentUserId } from 'src/common/decorators/current-user.decorator';
-import { RateLimit } from 'src/common/decorators/rate-limit.decorator';
+// import { RateLimit } from 'src/common/decorators/rate-limit.decorator';
+import { REFRESH_COOKIE_NAME, refreshCookieOptions } from './cookie-options';
 
 // =====================
 // DTOs
@@ -89,35 +92,65 @@ export class AuthController {
   }
 
   @Post('register')
-  async register(@Body() dto: RegisterDto, @Req() req: Request) {
+  async register(
+    @Body() dto: RegisterDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
     const ctx = this.getCtx(req);
-    return this.auth.register(dto.email, dto.password, ctx);
+    const out = await this.auth.register(dto.email, dto.password, ctx);
+
+    res.cookie(REFRESH_COOKIE_NAME, out.refreshToken, refreshCookieOptions);
+    // không cần gửi refreshToken trong body nữa
+    const { refreshToken, ...rest } = out;
+    return rest;
   }
 
   @Post('login')
-  @RateLimit({
-    capacity: 2,
-    refillTokens: 2,
-    refillIntervalMs: 60_000,
-    keyBy: 'email',
-  })
-  @HttpCode(HttpStatus.OK)
-  async login(@Body() dto: LoginDto, @Req() req: Request) {
+  async login(
+    @Body() dto: LoginDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
     const ctx = this.getCtx(req);
-    return this.auth.login(dto.email, dto.password, dto.deviceId, ctx);
+    const out = await this.auth.login(
+      dto.email,
+      dto.password,
+      dto.deviceId,
+      ctx,
+    );
+
+    res.cookie(REFRESH_COOKIE_NAME, out.refreshToken, refreshCookieOptions);
+    const { refreshToken, ...rest } = out;
+    return rest;
   }
 
   @Post('refresh')
-  @HttpCode(HttpStatus.OK)
-  async refresh(@Body() dto: RefreshDto, @Req() req: Request) {
-    const ctx = this.getCtx(req);
-    return this.auth.refresh(dto.refreshToken, ctx);
+  async refresh(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const rt = req.cookies?.[REFRESH_COOKIE_NAME];
+    if (!rt) throw new UnauthorizedException('Missing refresh token');
+
+    const out = await this.auth.refresh(rt, this.getCtx(req));
+    res.cookie(REFRESH_COOKIE_NAME, out.refreshToken, refreshCookieOptions);
+
+    const { refreshToken, ...rest } = out;
+    return rest;
   }
 
   @Post('logout')
-  @HttpCode(HttpStatus.OK)
-  async logout(@Body() dto: LogoutDto) {
-    return this.auth.logout(dto.refreshToken);
+  @HttpCode(200)
+  async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
+    const rt = req.cookies?.[REFRESH_COOKIE_NAME];
+    if (rt) await this.auth.logout(rt);
+    // xoá cookie
+    res.clearCookie(REFRESH_COOKIE_NAME, {
+      ...refreshCookieOptions,
+      maxAge: 0,
+    });
+    return { ok: true };
   }
 
   @Post('logout-all')

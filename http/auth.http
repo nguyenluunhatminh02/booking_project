@@ -1,19 +1,12 @@
-### ======================
-### ENV & DEFAULTS
-### ======================
 @baseUrl = http://localhost:3000
-@accessToken = acb
-@refreshToken = acb
 @json = application/json
-# sinh email duy nhất theo timestamp
 @email = userdangcap@example.com
 @password = StrongPass123!
 @deviceId = chrome-123
 
-### ======================
-### REGISTER
-### ======================
-# @name register
+### ===== BODY MODE (refreshToken trong body) =====
+
+### Register (BODY)
 POST {{baseUrl}}/auth/register
 Content-Type: {{json}}
 
@@ -22,22 +15,7 @@ Content-Type: {{json}}
   "password": "{{password}}"
 }
 
-# > {% 
-#   const body = JSON.parse(response.body);
-#   client.global.set("accessToken", body.accessToken);
-#   client.global.set("accessTokenExpSec", body.accessTokenExpSec ?? "");
-#   client.global.set("refreshToken", body.refreshToken);
-#   client.global.set("userId", body.user.id);
-# %}
-
-### Quick check saved vars
-GET {{baseUrl}}/ping
-Authorization: Bearer {{accessToken}}
-
-### ======================
-### LOGIN (same account)
-### ======================
-# @name login
+### Login (BODY) -> copy accessToken, refreshToken từ response
 POST {{baseUrl}}/auth/login
 Content-Type: {{json}}
 
@@ -47,98 +25,26 @@ Content-Type: {{json}}
   "deviceId": "{{deviceId}}"
 }
 
-# > {% 
-#   const body = JSON.parse(response.body);
-#   client.global.set("accessToken", body.accessToken);
-#   client.global.set("accessTokenExpSec", body.accessTokenExpSec ?? "");
-#   client.global.set("refreshToken", body.refreshToken);
-# %}
-
-### ======================
-### REFRESH (get new AT/RT)
-### ======================
-# @name refresh
+### Refresh (BODY) -> dán refreshToken vào đây
 POST {{baseUrl}}/auth/refresh
 Content-Type: {{json}}
 
 {
-  "refreshToken": "{{refreshToken}}"
+  "refreshToken": "PASTE_REFRESH_TOKEN_HERE"
 }
 
-> {% 
-  const body = JSON.parse(response.body);
-  client.global.set("accessToken", body.accessToken);
-  client.global.set("accessTokenExpSec", body.accessTokenExpSec ?? "");
-  client.global.set("refreshToken", body.refreshToken);
-%}
-
-### ======================
-### LOGOUT (by refresh token)
-### ======================
-# @name logout
+### Logout (BODY) -> dán refreshToken đã dùng
 POST {{baseUrl}}/auth/logout
 Content-Type: {{json}}
 
 {
-  "refreshToken": "{{refreshToken}}"
+  "refreshToken": "PASTE_REFRESH_TOKEN_HERE"
 }
 
-### ======================
-### LOGOUT ALL (Bearer required)
-### ======================
-# Yêu cầu đã đăng nhập (Authorization: Bearer)
-# Nếu bạn dùng @CurrentUserId qua JwtAuthGuard trong controller,
-# chỉ cần header Authorization — không cần body userId.
-# @name logoutAll
-POST {{baseUrl}}/auth/logout-all
-Content-Type: {{json}}
-Authorization: Bearer {{accessToken}}
+### ===== COOKIE MODE (refreshToken bằng HttpOnly cookie) =====
+# Bật cookie jar nếu dùng REST Client (rememberCookiesForSubsequentRequests: true)
 
-{
-  "keepSessionId": null
-}
-
-### ======================
-### REVOKE ACCESS TOKEN (denylist current AT)
-### ======================
-# @name revokeAccess
-POST {{baseUrl}}/auth/revoke-access
-Content-Type: {{json}}
-
-{
-  "accessToken": "{{accessToken}}"
-}
-
-### ======================
-### NEGATIVE: WRONG PASSWORD
-### ======================
-# @name loginWrongPassword
-POST {{baseUrl}}/auth/login
-Content-Type: {{json}}
-
-{
-  "email": "{{email}}",
-  "password": "WrongPass!!"
-}
-
-### ======================
-### NEGATIVE: REFRESH WITH OLD TOKEN (after refresh)
-### (Run REFRESH above first to rotate, then try this with the old {{refreshToken}} saved before rotation)
-### ======================
-# Manually paste an older refresh token here to test reuse/grace behavior
-# @name refreshOld
-POST {{baseUrl}}/auth/refresh
-Content-Type: {{json}}
-
-{
-  "refreshToken": "PASTE_OLD_REFRESH_TOKEN_HERE"
-}
-
-### ======================
-### STRESS: RATE LIMIT DEMO (register same email repeatedly)
-### (Run several times quickly to trigger 429)
-### ======================
-# @name registerRateLimit
+### Register (COOKIE)
 POST {{baseUrl}}/auth/register
 Content-Type: {{json}}
 
@@ -146,3 +52,32 @@ Content-Type: {{json}}
   "email": "{{email}}",
   "password": "{{password}}"
 }
+
+### Login (COOKIE) -> server Set-Cookie: rt=...
+POST {{baseUrl}}/auth/login
+Content-Type: {{json}}
+
+{
+  "email": "{{email}}",
+  "password": "{{password}}",
+  "deviceId": "{{deviceId}}"
+}
+
+### Refresh (COOKIE) -> cookie jar sẽ tự gửi rt; nếu không, tự thêm header Cookie
+POST {{baseUrl}}/auth/refresh
+Content-Type: {{json}}
+
+{}
+
+### (Nếu KHÔNG bật cookie jar) Refresh thủ công với header Cookie:
+POST {{baseUrl}}/auth/refresh
+Content-Type: {{json}}
+Cookie: rt=PASTE_RT_COOKIE_VALUE
+
+{}
+
+### Logout (COOKIE) -> server clear cookie
+POST {{baseUrl}}/auth/logout
+Content-Type: {{json}}
+
+{}

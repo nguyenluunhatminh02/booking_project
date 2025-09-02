@@ -4,12 +4,12 @@ import {
   Controller,
   HttpCode,
   HttpStatus,
-  Patch,
   Post,
   Req,
   Res,
   UnauthorizedException,
   UseGuards,
+  UseInterceptors,
   UsePipes,
   ValidationPipe,
 } from '@nestjs/common';
@@ -23,20 +23,16 @@ import {
 } from 'class-validator';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './guards/jwt.guard';
-import {
-  CurrentUser,
-  CurrentUserId,
-} from 'src/common/decorators/current-user.decorator';
+import { CurrentUserId } from 'src/common/decorators/current-user.decorator';
 // import { RateLimit } from 'src/common/decorators/rate-limit.decorator';
 import { REFRESH_COOKIE_NAME, refreshCookieOptions } from './cookie-options';
-import { RequireRole } from '../rbac/decorators/role.decorator';
 import { Public } from 'src/common/decorators/public.decorator';
 import {
-  RequireAnyPermissions,
   RequirePermissions,
   Resource,
 } from '../rbac/decorators/permissions.decorator';
 import { P, R } from '../rbac/perms';
+import { AuditInterceptor } from '../audit/audit.interceptor';
 
 // =====================
 // DTOs
@@ -104,6 +100,7 @@ export class AuthController {
   }
 
   @Post('register')
+  @Public()
   async register(
     @Body() dto: RegisterDto,
     @Req() req: Request,
@@ -118,6 +115,7 @@ export class AuthController {
     return rest;
   }
 
+  @UseInterceptors(AuditInterceptor)
   @Post('login')
   @Public()
   async login(

@@ -52,8 +52,8 @@ POST {{baseUrl}}/auth/register
 Content-Type: {{json}}
 
 {
-  "email": "{{email}}",
-  "password": "{{password}}"
+  "email": "{{email1}}",
+  "password": "{{password1}}"
 }
 
 ### Login (COOKIE) -> server Set-Cookie: rt=...

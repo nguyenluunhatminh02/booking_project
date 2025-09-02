@@ -33,6 +33,7 @@ import {
 } from '../rbac/decorators/permissions.decorator';
 import { P, R } from '../rbac/perms';
 import { AuditInterceptor } from '../audit/audit.interceptor';
+import { Audit } from 'src/common/decorators/audit.decorator';
 
 // =====================
 // DTOs
@@ -84,6 +85,7 @@ class RevokeAccessDto {
 }
 
 @Controller('auth')
+@UseInterceptors(AuditInterceptor)
 @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
 export class AuthController {
   constructor(private readonly auth: AuthService) {}
@@ -115,8 +117,11 @@ export class AuthController {
     return rest;
   }
 
-  @UseInterceptors(AuditInterceptor)
   @Post('login')
+  @Audit({
+    action: 'AUTH_LOGIN',
+    entity: 'USER',
+  })
   @Public()
   async login(
     @Body() dto: LoginDto,

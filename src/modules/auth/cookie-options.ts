@@ -9,4 +9,5 @@ export const refreshCookieOptions: CookieOptions = {
   path: '/auth', // chỉ gửi cho các route auth
   maxAge: 30 * 24 * 3600 * 1000, // sync với refresh TTL
   // domain: '.yourdomain.com',   // nếu dùng subdomain
+  // signed: true,
 };

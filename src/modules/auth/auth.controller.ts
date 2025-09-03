@@ -35,6 +35,7 @@ import { P, R } from '../rbac/perms';
 import { AuditInterceptor } from '../audit/audit.interceptor';
 import { Audit } from 'src/common/decorators/audit.decorator';
 import { DeviceApprovalService } from './device-approval.service';
+import { XssSanitize } from 'src/common/transforms/senitize-html.transform';
 
 // =====================
 // DTOs
@@ -54,6 +55,7 @@ class ApproveDeviceDto {
 
 class LoginDto {
   @IsEmail()
+  @XssSanitize()
   email!: string;
 
   @IsString()

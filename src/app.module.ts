@@ -12,6 +12,7 @@ import { RbacModule } from './modules/rbac/rbac.module';
 import { LoggerModule } from './logger/logger.module';
 import { RequestContextMiddleware } from './common/middlewares/request-context.middleware';
 import { MfaModule } from './modules/mfa/mfa.module';
+import { XssMiddleware } from './common/middlewares/xss.middleware';
 
 @Module({
   imports: [
@@ -32,6 +33,10 @@ import { MfaModule } from './modules/mfa/mfa.module';
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
-    consumer.apply(RequestContextMiddleware).forRoutes('*');
+    consumer
+      .apply(RequestContextMiddleware)
+      .forRoutes('*')
+      .apply(XssMiddleware)
+      .forRoutes('*');
   }
 }

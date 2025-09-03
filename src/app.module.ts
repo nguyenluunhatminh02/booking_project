@@ -13,6 +13,8 @@ import { LoggerModule } from './logger/logger.module';
 import { RequestContextMiddleware } from './common/middlewares/request-context.middleware';
 import { MfaModule } from './modules/mfa/mfa.module';
 import { XssMiddleware } from './common/middlewares/xss.middleware';
+import { CsrfController } from './common/controllers/csrf.controller';
+import { CsrfMiddleware } from './common/middlewares/csrf.middleware';
 
 @Module({
   imports: [
@@ -23,7 +25,7 @@ import { XssMiddleware } from './common/middlewares/xss.middleware';
     LoggerModule,
     MfaModule,
   ],
-  controllers: [AppController],
+  controllers: [AppController, CsrfController],
   providers: [
     AppService,
     TokenBucketService,
@@ -37,6 +39,8 @@ export class AppModule implements NestModule {
       .apply(RequestContextMiddleware)
       .forRoutes('*')
       .apply(XssMiddleware)
+      .forRoutes('*')
+      .apply(CsrfMiddleware)
       .forRoutes('*');
   }
 }

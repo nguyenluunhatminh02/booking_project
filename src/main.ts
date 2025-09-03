@@ -7,6 +7,7 @@ import { ValidationPipe } from '@nestjs/common';
 import helmet from 'helmet';
 import * as hpp from 'hpp';
 import * as compression from 'compression';
+import { CsrfExceptionFilter } from './common/filters/csrf-exception.filter';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
@@ -36,7 +37,7 @@ async function bootstrap() {
 
   // Prevent HTTP Parameter Pollution
   app.use(hpp());
-
+  app.useGlobalFilters(new CsrfExceptionFilter());
   //  const allowlist = (process.env.CORS_ORIGINS ?? '').split(',').filter(Boolean);
   app.enableCors({
     //  origin: (origin, cb) => {

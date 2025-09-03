@@ -34,6 +34,7 @@ import {
 import { P, R } from '../rbac/perms';
 import { AuditInterceptor } from '../audit/audit.interceptor';
 import { Audit } from 'src/common/decorators/audit.decorator';
+import { DeviceApprovalService } from './device-approval.service';
 
 // =====================
 // DTOs
@@ -47,6 +48,10 @@ class RegisterDto {
   password!: string;
 }
 
+class ApproveDeviceDto {
+  token!: string;
+}
+
 class LoginDto {
   @IsEmail()
   email!: string;
@@ -58,6 +63,10 @@ class LoginDto {
   @IsOptional()
   @IsString()
   deviceId?: string;
+
+  @IsOptional()
+  @IsString()
+  deviceFp?: string; // FE gửi fingerprint hash
 }
 
 class RefreshDto {
@@ -88,17 +97,19 @@ class RevokeAccessDto {
 @UseInterceptors(AuditInterceptor)
 @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
 export class AuthController {
-  constructor(private readonly auth: AuthService) {}
+  constructor(
+    private readonly auth: AuthService,
+    private readonly das: DeviceApprovalService,
+  ) {}
 
-  // helper lấy IP/UA (trust proxy đã bật ở main.ts nếu dùng LB)
-  private getCtx(req: Request) {
-    // Nếu đã app.set('trust proxy', true), req.ip sẽ là client IP thực
-    const ip =
-      (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
-      (req.socket?.remoteAddress ?? req.ip) ||
-      'unknown';
-    const ua = req.headers['user-agent'];
-    return { ip, ua };
+  // Helper methods
+  private setRefreshTokenCookie(res: Response, token: string) {
+    res.cookie(REFRESH_COOKIE_NAME, token, refreshCookieOptions);
+  }
+
+  private excludeRefreshToken<T extends { refreshToken: string }>(data: T) {
+    const { refreshToken: _, ...rest } = data;
+    return rest;
   }
 
   @Post('register')
@@ -108,13 +119,10 @@ export class AuthController {
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const ctx = this.getCtx(req);
-    const out = await this.auth.register(dto.email, dto.password, ctx);
-
-    res.cookie(REFRESH_COOKIE_NAME, out.refreshToken, refreshCookieOptions);
+    const result = await this.auth.register(dto.email, dto.password, req.ctx);
     // không cần gửi refreshToken trong body nữa
-    const { refreshToken, ...rest } = out;
-    return rest;
+    this.setRefreshTokenCookie(res, result.refreshToken);
+    return this.excludeRefreshToken(result);
   }
 
   @Post('login')
@@ -128,17 +136,21 @@ export class AuthController {
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const ctx = this.getCtx(req);
     const out = await this.auth.login(
       dto.email,
       dto.password,
       dto.deviceId,
-      ctx,
+      req.ctx,
     );
 
     res.cookie(REFRESH_COOKIE_NAME, out.refreshToken, refreshCookieOptions);
     const { refreshToken, ...rest } = out;
     return rest;
+  }
+
+  @Post('approve-device')
+  async approve(@Body() dto: ApproveDeviceDto) {
+    return this.das.approve(dto.token);
   }
 
   @Post('refresh')
@@ -149,7 +161,7 @@ export class AuthController {
     const rt = req.cookies?.[REFRESH_COOKIE_NAME];
     if (!rt) throw new UnauthorizedException('Missing refresh token');
 
-    const out = await this.auth.refresh(rt, this.getCtx(req));
+    const out = await this.auth.refresh(rt, req.ctx);
     res.cookie(REFRESH_COOKIE_NAME, out.refreshToken, refreshCookieOptions);
 
     const { refreshToken, ...rest } = out;

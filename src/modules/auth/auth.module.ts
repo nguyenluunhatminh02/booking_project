@@ -13,6 +13,7 @@ import { SecurityEventsService } from '../security/security-events.service';
 import { PassportModule } from '@nestjs/passport';
 import { APP_GUARD } from '@nestjs/core';
 import { AuditLogService } from '../audit/audit-log.service';
+import { DeviceApprovalService } from './device-approval.service';
 
 @Module({
   imports: [
@@ -37,6 +38,7 @@ import { AuditLogService } from '../audit/audit-log.service';
     TokenStateService,
     SecurityEventsService,
     AuditLogService,
+    DeviceApprovalService,
     { provide: APP_GUARD, useClass: JwtAuthGuard },
   ],
   exports: [JwtAuthGuard, JwtAccessStrategy],

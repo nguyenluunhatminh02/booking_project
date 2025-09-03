@@ -51,19 +51,19 @@ Content-Type: {{json}}
 POST {{baseUrl}}/auth/register
 Content-Type: {{json}}
 
-{
-  "email": "{{email1}}",
-  "password": "{{password1}}"
-}
+{ "email": "user@example.com", "password": "User@123456" }
+
 
 ### Login (COOKIE) -> server Set-Cookie: rt=...
 POST {{baseUrl}}/auth/login
 Content-Type: {{json}}
+User-Agent: MyBrowser/1.0
 
 {
   "email": "{{email1}}",
   "password": "{{password1}}",
-  "deviceId": "{{deviceId}}"
+  "deviceId": "{{deviceId}}",
+  "deviceFp": "fp-A"
 }
 
 ### Refresh (COOKIE) -> cookie jar sẽ tự gửi rt; nếu không, tự thêm header Cookie
@@ -76,6 +76,7 @@ Content-Type: {{json}}
 POST {{baseUrl}}/auth/refresh
 Content-Type: {{json}}
 Cookie: rt=PASTE_RT_COOKIE_VALUE
+User-Agent: MyBrowser/DIFF
 
 {}
 

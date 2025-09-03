@@ -29,11 +29,12 @@ import {
 
 import { to429 } from 'src/common/errors/app.exception';
 import { SecurityEventsService } from '../security/security-events.service';
+import { DeviceApprovalService } from './device-approval.service';
 
 // ===================
 // Constants / Policy
 // ===================
-type NetCtx = { ip?: string; ua?: string };
+type NetCtx = { ip?: string; ua?: string; deviceFp?: string };
 
 const NS = 'v1:auth';
 
@@ -69,6 +70,7 @@ export class AuthService {
     private readonly tokenState: TokenStateService,
     private readonly tb: TokenBucketService,
     private readonly sec: SecurityEventsService,
+    private readonly das: DeviceApprovalService,
   ) {}
 
   // ================
@@ -103,6 +105,7 @@ export class AuthService {
   private async createSessionAndRefreshToken(
     userId: string,
     deviceId?: string,
+    ctx?: NetCtx,
   ): Promise<{
     refreshToken: string;
     refreshExpiresAt: Date;
@@ -123,6 +126,11 @@ export class AuthService {
         refreshHash,
         tokenVersion: 0,
         expiresAt: refreshExpiresAt,
+        // --- binding info ---
+        ip: ctx?.ip,
+        userAgent: ctx?.ua,
+        deviceFp: ctx?.deviceFp,
+        approved: true, // lần đầu cho qua (tuỳ policy)
       },
     });
 
@@ -350,7 +358,7 @@ export class AuthService {
     // Issue tokens
     const { token: accessToken, exp } = await this.signAccessToken(user);
     const { refreshToken, refreshExpiresAt, sessionId } =
-      await this.createSessionAndRefreshToken(user.id, deviceId);
+      await this.createSessionAndRefreshToken(user.id, deviceId, ctx);
     // LOGIN SUCCESS
     await this.sec.loginSuccess(user.id, sessionId, ctx, { deviceId });
     return {
@@ -395,6 +403,38 @@ export class AuthService {
         }
       }
       throw new UnauthorizedException('Session expired');
+    }
+
+    // chặn nếu chưa được phê duyệt
+    if (session.approved === false) {
+      throw new UnauthorizedException('Device approval required');
+    }
+
+    // Heuristic: khác UA/FP → chuyển sang require approval
+    const suspicious =
+      (ctx?.ua && session.userAgent && ctx.ua !== session.userAgent) ||
+      (ctx?.deviceFp && session.deviceFp && ctx.deviceFp !== session.deviceFp);
+
+    if (suspicious) {
+      // đánh dấu session cần phê duyệt & issue token
+      await this.prisma.userSession.update({
+        where: { id: session.id },
+        data: { approved: false },
+      });
+
+      try {
+        const fp = ctx?.deviceFp;
+        await this.das.issue(session.userId, session.id, {
+          ip: ctx?.ip,
+          ua: ctx?.ua,
+          fp,
+        });
+        // TODO: log security event nếu muốn
+      } catch {
+        /* best-effort */
+      }
+
+      throw new UnauthorizedException('Device approval required');
     }
 
     // Match current

@@ -1,0 +1,49 @@
+@base = http://localhost:3000
+@json = application/json
+@token = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdiI6MSwiaWF0IjoxNzU2ODM2OTcyLCJleHAiOjE3NTY4Mzc4NzIsImF1ZCI6ImJvb2tpbmctZmUiLCJpc3MiOiJib29raW5nLWFwaSIsInN1YiI6IjNlNDA4YTJjLWFmNzctNDM5MS1hODY5LTdlYjZkYzAzNjI3NiIsImp0aSI6ImI1ZTc3YWVmLTYwNjYtNDcwZC1hNDhkLTkxNDk4YmFiM2Y0OCJ9.sb5vtSAJB_xynDgGjqssNPE1fibaJDYiuv7asXEeXU0
+
+### Login lấy token (user thường)
+POST {{base}}/auth/login
+Content-Type: {{json}}
+
+{ "email": "user@example.com", "password": "User@123456", "deviceId": "web-1" }
+
+
+### Xem trạng thái MFA
+GET {{base}}/mfa/status
+Authorization: {{token}}
+
+### Bắt đầu enroll TOTP (trả secret + otpauth + qrDataUrl)
+POST {{base}}/mfa/totp/start
+Authorization: {{token}}
+Content-Type: {{json}}
+
+{ "issuer": "BookingApp", "label": "user@example.com" }
+
+### Enable TOTP (nhập code từ app Authenticator)
+POST {{base}}/mfa/totp/enable
+Authorization: Bearer {{token}}
+Content-Type: {{json}}
+
+{ "code": "123456" }
+
+### Generate backup codes
+POST {{base}}/mfa/backup/generate
+Authorization: Bearer {{token}}
+Content-Type: {{json}}
+
+{ "count": 10 }
+
+### Verify TOTPs (test)
+POST {{base}}/mfa/totp/verify
+Authorization: Bearer {{token}}
+Content-Type: {{json}}
+
+{ "code": "123456" }
+
+### Disable TOTP (bằng code hoặc backup code)
+POST {{base}}/mfa/totp/disable
+Authorization: Bearer {{token}}
+Content-Type: {{json}}
+
+{ "code": "123456" }

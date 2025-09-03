@@ -64,6 +64,8 @@ model User {
 
   @@map("users")
   ResourceACL ResourceACL[]
+  UserMfa UserMfa[]
+  BackupCode BackupCode[]
 }
 
 model UserSession {
@@ -79,6 +81,10 @@ model UserSession {
   // observability / forensics
   ip              String?  // prefer @db.Inet if supported by your Prisma
   userAgent       String?
+
+  deviceFp        String?   // fingerprint từ FE (tuỳ bạn)
+  approved        Boolean   @default(true) // false => cần device approval flow
+
   lastUsedAt      DateTime?
   rotatedAt       DateTime?
   reusedAt        DateTime?
@@ -253,4 +259,36 @@ model UserToken {
   @@index([type, expiresAt])
   @@index([userId, type, createdAt])
   @@map("user_tokens")
+}
+
+
+
+model UserMfa {
+  id           String   @id @default(uuid())
+  userId       String   @unique
+  totpSecret   String   // base32 (encrypted/at-rest nếu có KMS)
+  enabled      Boolean  @default(false)
+  verifiedAt   DateTime?
+  verifyAttempts Int       @default(0)      // Thêm field này
+  lastVerifyAt   DateTime? // Thêm field này để track thời gian
+  recoveryKeyHash    String?   // Thêm field này để lưu recovery key
+  recoveryKeyUsedAt  DateTime? // Track thời gian sử dụng recovery key
+  createdAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_mfa")
+}
+
+model BackupCode {
+  id        String   @id @default(uuid())
+  userId    String
+  codeHash  String   // store hash (không plaintext)
+  usedAt    DateTime?
+
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, usedAt])
+  @@map("backup_codes")
 }

@@ -9,8 +9,11 @@ export class PrismaService extends PrismaClient implements OnModuleInit {
       errorFormat: 'minimal',
     });
   }
+  prisma = new PrismaClient();
+
   async onModuleInit() {
     await this.$connect();
+    // this.prisma.
   }
 
   async onModuleDestroy() {

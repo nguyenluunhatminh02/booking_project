@@ -181,6 +181,7 @@ model SecurityEvent {
   type      SecurityEventType
   ip        String?
   userAgent String?
+  deviceFp    String?   // Changed from deviceFingerprint
   meta      Json?
   createdAt DateTime          @default(now())
 

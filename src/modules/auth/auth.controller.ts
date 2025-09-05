@@ -164,7 +164,7 @@ export class AuthController {
     if (!rt) throw new UnauthorizedException('Missing refresh token');
 
     const out = await this.auth.refresh(rt, req.ctx);
-    res.cookie(REFRESH_COOKIE_NAME, out.refreshToken, refreshCookieOptions);
+    res.cookie(REFRESH_COOKIE_NAME, out?.refreshToken, refreshCookieOptions);
 
     const { refreshToken, ...rest } = out;
     return rest;

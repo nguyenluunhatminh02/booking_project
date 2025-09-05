@@ -4,8 +4,8 @@ import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 
 type JwtPayload = {
-  sub: string; // user id
-  av: number; // accessVersion
+  sub: string;
+  av: number;
   jti: string;
   iat: number;
   exp: number;
@@ -24,7 +24,6 @@ export class JwtAccessStrategy extends PassportStrategy(Strategy, 'jwt') {
   }
 
   validate(payload: JwtPayload) {
-    // normalize về shape thống nhất cho toàn app
     return {
       id: payload.sub,
       av: payload.av,

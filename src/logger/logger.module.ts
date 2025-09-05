@@ -82,10 +82,7 @@ function levelByStatus(res: any, err?: any) {
 
           const ua = (req.headers['user-agent'] as string) || undefined;
           const userId = (req as any).user?.id; // sau JWT guard
-          const deviceFp =
-            (req.headers['x-device-fp'] as string) ||
-            (req as any).ctx?.deviceFp ||
-            undefined;
+          const deviceFp = (req as any).ctx?.deviceFp;
 
           return { ip, ua, userId, deviceFp };
         },

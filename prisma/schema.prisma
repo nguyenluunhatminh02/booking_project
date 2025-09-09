@@ -74,6 +74,7 @@ model UserSession {
   deviceId        String?
   refreshHash     String
   tokenVersion    Int      @default(0)
+  accessSv     Int      @default(1)
   expiresAt       DateTime
   revokedAt       DateTime?
   revokedReason   SessionRevokeReason?

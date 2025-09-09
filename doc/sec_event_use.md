@@ -129,3 +129,34 @@ export class RbacAdminService {
     });
   }
 }
+
+Comprehensive Event Types
+
+Login events (success/failure)
+Token management
+MFA operations
+Device management
+Suspicious activities
+Rich Context Tracking
+
+IP addresses
+User agents
+Device fingerprints
+Location data
+Risk scores
+Security Analysis
+
+Failed login thresholds
+Location change detection
+Device change monitoring
+Pattern recognition
+Automated Responses
+
+Token reuse handling
+Account protection measures
+Suspicious activity logging
+Analytics Support
+
+Login pattern analysis
+Device usage tracking
+Success/failure ratios

@@ -1,4 +1,3 @@
-// src/auth/auth.service.ts
 import {
   BadRequestException,
   Injectable,
@@ -74,12 +73,22 @@ export class AuthService {
   private pendingKey = (sid: string, oldHash: string) =>
     `${NS}:rt:pending:${sid}:${oldHash}`;
 
-  private async signAccessToken(user: { id: string; email: string }) {
+  private async signAccessToken(
+    user: { id: string; email: string },
+    opts?: { sessionId?: string },
+  ) {
     const av = await this.tokenState.getAccessVersion(user.id);
     const jti = crypto.randomUUID?.() ?? uuidv4();
 
+    // nhúng sid/sv nếu có
+    const sid = opts?.sessionId;
+    let sv: number | undefined;
+    if (sid) {
+      sv = await this.tokenState.getSessionVersion(sid);
+    }
+
     const token = this.jwt.sign(
-      { av },
+      { av, sid, sv },
       {
         subject: user.id,
         jwtid: jti,
@@ -90,8 +99,7 @@ export class AuthService {
       },
     );
 
-    const decoded = this.jwt.decode(token);
-    const exp = decoded?.exp;
+    const exp = this.jwt.decode(token)?.exp;
     return { token, jti, exp };
   }
 
@@ -122,6 +130,7 @@ export class AuthService {
         deviceId,
         refreshHash,
         tokenVersion: 0,
+        accessSv: 1, // NEW
         expiresAt: refreshExpiresAt,
         ip: ctx?.ip,
         userAgent: ctx?.ua,
@@ -135,14 +144,18 @@ export class AuthService {
         ttlSec: this.refreshTtlSec,
         nx: true,
       });
+      // NEW: giữ session version trong Redis cùng TTL với RT
+      await this.redis.set(`${NS}:sv:${sessionId}`, '1', {
+        ttlSec: this.refreshTtlSec,
+        nx: true,
+      });
     }
 
     return { refreshToken, sessionId, refreshExpiresAt };
   }
 
   /**
-   * Rotate RT an toàn (CAS theo *expectedOldHash từ client*).
-   * Nếu CAS thất bại => trả {rotated:false} để caller xử lý idempotency.
+   * Rotate RT an toàn (CAS theo expectedOldHash).
    */
   private async rotateRefreshTokenCAS(
     sessionId: string,
@@ -161,7 +174,13 @@ export class AuthService {
     const prevGraceUntil = new Date(now + this.refreshGraceSec * 1000);
 
     const res = await this.prisma.userSession.updateMany({
-      where: { id: sessionId, userId, refreshHash: expectedOldHash },
+      where: {
+        id: sessionId,
+        userId,
+        refreshHash: expectedOldHash,
+        revokedAt: null, // NEW: không rotate nếu đã revoke
+        // approved: true,     // (tuỳ policy)
+      },
       data: {
         prevRefreshHash: expectedOldHash,
         prevExpiresAt: prevGraceUntil,
@@ -169,18 +188,24 @@ export class AuthService {
         tokenVersion: { increment: 1 },
         expiresAt,
         rotatedAt: new Date(),
-        revokedAt: null,
+        // ❌ KHÔNG set revokedAt ở đây
       },
     });
 
     if (res.count !== 1) return { rotated: false };
 
-    // set fast-path TTL
     if (this.redis.enabled) {
+      // gia hạn alive-bit
       await this.redis.set(`${NS}:rt:${sessionId}`, '1', {
         ttlSec: this.refreshTtlSec,
       });
-      // lưu idempotency map trong grace window
+      // NEW: gia hạn TTL cho sv cùng nhịp
+      const sv = (await this.redis.get(`${NS}:sv:${sessionId}`)) ?? '1';
+      await this.redis.set(`${NS}:sv:${sessionId}`, sv, {
+        ttlSec: this.refreshTtlSec,
+      });
+
+      // idempotency map trong grace window
       try {
         const p = JSON.stringify({
           refreshToken: newRefresh,
@@ -214,6 +239,7 @@ export class AuthService {
     if (this.redis.enabled) {
       try {
         await this.redis.del(`${NS}:rt:${sessionId}`);
+        await this.redis.del(`${NS}:sv:${sessionId}`); // NEW: dọn sv key
       } catch {
         /* empty */
       }
@@ -260,9 +286,12 @@ export class AuthService {
       throw e;
     }
 
-    const { token: accessToken, exp } = await this.signAccessToken(user);
-    const { refreshToken, refreshExpiresAt } =
-      await this.createSessionAndRefreshToken(user.id);
+    // NEW: tạo session trước, rồi ký AT kèm sid/sv
+    const { refreshToken, refreshExpiresAt, sessionId } =
+      await this.createSessionAndRefreshToken(user.id, undefined, ctx);
+    const { token: accessToken, exp } = await this.signAccessToken(user, {
+      sessionId,
+    });
 
     return {
       user,
@@ -341,9 +370,12 @@ export class AuthService {
       }
     }
 
-    const { token: accessToken, exp } = await this.signAccessToken(user);
+    // NEW: tạo session trước, rồi ký AT kèm sid/sv
     const { refreshToken, refreshExpiresAt, sessionId } =
       await this.createSessionAndRefreshToken(user.id, deviceId, ctx);
+    const { token: accessToken, exp } = await this.signAccessToken(user, {
+      sessionId,
+    });
 
     await this.sec.loginSuccess(user.id, sessionId, ctx, { deviceId });
     return {
@@ -381,6 +413,7 @@ export class AuthService {
       if (this.redis.enabled) {
         try {
           await this.redis.del(`${NS}:rt:${sessionId}`);
+          await this.redis.del(`${NS}:sv:${sessionId}`);
         } catch {
           /* empty */
         }
@@ -399,6 +432,8 @@ export class AuthService {
         where: { id: session.id },
         data: { approved: false },
       });
+      // NEW: kill AT của đúng session ngay
+      await this.tokenState.bumpSessionVersion(session.id);
       try {
         await this.das.issue(session.userId, session.id, {
           ip: ctx?.ip,
@@ -413,7 +448,6 @@ export class AuthService {
 
     // --- Case 1: match current hash -> try CAS rotate ---
     if (verifyRefreshPart(tokenPart, session.refreshHash)) {
-      // update lastUsedAt (best-effort)
       await this.prisma.userSession
         .update({ where: { id: sessionId }, data: { lastUsedAt: now } })
         .catch(() => {});
@@ -428,6 +462,7 @@ export class AuthService {
       if (cas.rotated) {
         const { token: accessToken, exp } = await this.signAccessToken(
           session.user,
+          { sessionId },
         );
         return {
           accessToken,
@@ -438,8 +473,7 @@ export class AuthService {
         };
       }
 
-      // CAS failed => có request khác vừa xoay A->B.
-      // Thử lấy idempotent từ Redis pending map (sid, expectedOldHash=A)
+      // CAS failed -> thử lấy idempotent (sid, expectedOldHash=A)
       if (this.redis.enabled) {
         const raw = await this.redis.get(
           this.pendingKey(sessionId, expectedOld),
@@ -449,6 +483,7 @@ export class AuthService {
             const parsed = JSON.parse(raw);
             const { token: accessToken, exp } = await this.signAccessToken(
               session.user,
+              { sessionId },
             );
             return {
               accessToken,
@@ -463,7 +498,7 @@ export class AuthService {
         }
       }
 
-      // Fallback: reload & treat as inGrace (A == prev) hoặc double-rotate
+      // Fallback: reload & treat as inGrace
       session = await this.prisma.userSession.findUnique({
         where: { id: sessionId },
         include: { user: { select: { id: true, email: true } } },
@@ -474,7 +509,6 @@ export class AuthService {
         session.prevExpiresAt > now &&
         verifyRefreshPart(tokenPart, session.prevRefreshHash)
       ) {
-        // Single-use prev: clear prev*, không xoay lại nếu có idempotent; nếu không, xoay từ current
         await this.prisma.userSession
           .update({
             where: { id: sessionId },
@@ -485,8 +519,6 @@ export class AuthService {
             },
           })
           .catch(() => {});
-
-        // thử lấy idempotent theo prevHash
         if (this.redis.enabled) {
           const raw = await this.redis.get(
             this.pendingKey(sessionId, session.prevRefreshHash),
@@ -496,6 +528,7 @@ export class AuthService {
               const parsed = JSON.parse(raw);
               const { token: accessToken, exp } = await this.signAccessToken(
                 session.user,
+                { sessionId },
               );
               return {
                 accessToken,
@@ -509,7 +542,6 @@ export class AuthService {
             }
           }
         }
-        // không có idempotent -> xoay từ current (có thể double-rotate)
         const cas2 = await this.rotateRefreshTokenCAS(
           sessionId,
           session.userId,
@@ -519,6 +551,7 @@ export class AuthService {
           throw new UnauthorizedException('Refresh conflict, try again');
         const { token: accessToken, exp } = await this.signAccessToken(
           session.user,
+          { sessionId },
         );
         return {
           accessToken,
@@ -529,7 +562,6 @@ export class AuthService {
         };
       }
 
-      // không inGrace -> reuse
       if (!session) throw new UnauthorizedException('Invalid session');
       await this.reusePenalty(session, ctx);
     }
@@ -542,15 +574,12 @@ export class AuthService {
       verifyRefreshPart(tokenPart, session.prevRefreshHash);
 
     if (inGrace) {
-      // single-use prev: clear prev*
       await this.prisma.userSession
         .update({
           where: { id: sessionId },
           data: { lastUsedAt: now, prevRefreshHash: null, prevExpiresAt: null },
         })
         .catch(() => {});
-
-      // trả idempotent nếu có (prevHash làm key)
       if (this.redis.enabled) {
         const raw = await this.redis.get(
           this.pendingKey(sessionId, session.prevRefreshHash!),
@@ -560,6 +589,7 @@ export class AuthService {
             const parsed = JSON.parse(raw);
             const { token: accessToken, exp } = await this.signAccessToken(
               session.user,
+              { sessionId },
             );
             return {
               accessToken,
@@ -573,7 +603,6 @@ export class AuthService {
           }
         }
       }
-      // không có idempotent -> xoay từ current
       const cas = await this.rotateRefreshTokenCAS(
         sessionId,
         session.userId,
@@ -583,6 +612,7 @@ export class AuthService {
         throw new UnauthorizedException('Refresh conflict, try again');
       const { token: accessToken, exp } = await this.signAccessToken(
         session.user,
+        { sessionId },
       );
       return {
         accessToken,
@@ -625,6 +655,7 @@ export class AuthService {
     return { ok: true, revoked: res?.revoked ? 1 : 0 };
   }
 
+  // ---------- LOGOUT ALL ----------
   async logoutAll(userId: string, keepSessionId?: string) {
     const where = keepSessionId
       ? { userId, revokedAt: null, NOT: { id: keepSessionId } }
@@ -646,11 +677,17 @@ export class AuthService {
         try {
           const pipe = (this as any).redis?.redis?.pipeline?.() ?? null;
           if (pipe) {
-            for (const id of ids) pipe.del(`${NS}:rt:${id}`);
+            for (const id of ids) {
+              pipe.del(`${NS}:rt:${id}`);
+              pipe.del(`${NS}:sv:${id}`); // NEW: dọn sv key
+            }
             await pipe.exec();
           } else {
             await Promise.all(
               ids.map((id) => this.redis.del(`${NS}:rt:${id}`)),
+            );
+            await Promise.all(
+              ids.map((id) => this.redis.del(`${NS}:sv:${id}`)),
             );
           }
         } catch {
@@ -659,7 +696,10 @@ export class AuthService {
       }
     }
 
+    // Giữ semantics cũ: kill toàn bộ AT
     await this.tokenState.bumpAccessVersion(userId);
+    //  muốn giữ AT của session hiện tại, thì gọi:
+    // await this.tokenState.bumpSessionVersion(sessionsid);
     return { ok: true, revoked: ids.length };
   }
 
@@ -676,19 +716,16 @@ export class AuthService {
       const jti: string | undefined = verified?.jti;
       const exp: number | undefined = verified?.exp;
       const userId: string | undefined = verified?.sub;
-      const kid: string | undefined = this.jwt.decode(accessToken, {
-        complete: true,
-      })?.['header']?.['kid'];
 
       if (!jti || !exp) return { ok: false, reason: 'missing-claims' };
 
       const nowSec = Math.floor(Date.now() / 1000);
       if (exp <= nowSec) return { ok: true, alreadyExpired: true };
 
+      // đơn giản hoá: denylist chỉ theo jti
       await this.tokenState.denylistJti(
         jti,
         Math.min(exp, nowSec + MAX_DENY_TTL_SEC),
-        kid,
       );
 
       if (userId) {

@@ -8,12 +8,12 @@ import { RedisService } from 'src/common/redis.service';
 import { TokenBucketService } from 'src/common/token-bucket.service';
 import { TokenStateService } from './token-state.service';
 import { JwtAccessStrategy } from './strategy/jwt.strategy';
-import { JwtAuthGuard } from './guards/jwt.guard';
 import { SecurityEventsService } from '../security/security-events.service';
 import { PassportModule } from '@nestjs/passport';
 import { APP_GUARD } from '@nestjs/core';
 import { AuditLogService } from '../audit/audit-log.service';
 import { DeviceApprovalService } from './device-approval.service';
+import { JwtAuthGuard } from './guards/jwt.guard';
 
 @Module({
   imports: [

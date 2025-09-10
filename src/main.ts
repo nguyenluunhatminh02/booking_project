@@ -8,6 +8,8 @@ import helmet from 'helmet';
 import * as hpp from 'hpp';
 import * as compression from 'compression';
 import { CsrfExceptionFilter } from './common/filters/csrf-exception.filter';
+import { TransformInterceptor } from './common/transforms/transform.interceptor';
+import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
@@ -51,6 +53,11 @@ async function bootstrap() {
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
     exposedHeaders: ['Content-Length', 'Content-Type'],
   });
+  // Handler lỗi CSRF 403
+  app.use((err, req, res, next) => {
+    if (err?.code !== 'EBADCSRFTOKEN') return next(err);
+    return res.status(403).json({ message: 'Invalid CSRF token' });
+  });
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
@@ -58,6 +65,15 @@ async function bootstrap() {
       transform: true,
     }),
   );
+  app.useGlobalInterceptors(
+    new TransformInterceptor({
+      customSensitiveFields: ['ssn', 'creditCard'],
+      excludePaths: ['/docs', '/swagger'],
+      skipSanitization: process.env.NODE_ENV === 'development',
+    }),
+  );
+
+  app.useGlobalFilters(new GlobalExceptionFilter());
   await app.listen(process.env.PORT ?? 3000);
 }
 bootstrap();

@@ -1,3 +1,5 @@
+// src/common/middlewares/logging.middleware.ts
+
 import { Injectable, NestMiddleware } from '@nestjs/common';
 
 const SENSITIVE_KEYS = [

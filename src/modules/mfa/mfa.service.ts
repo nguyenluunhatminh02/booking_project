@@ -7,15 +7,18 @@ import { PrismaService } from 'src/prisma/prisma.service';
 import { authenticator } from 'otplib';
 import * as bcrypt from 'bcrypt';
 import * as QRCode from 'qrcode';
-import crypto from 'crypto';
+import { randomBytes, randomInt } from 'node:crypto';
 import { MFA_CONFIG } from './mfa.constants';
 import { AuditLogService } from '../audit/audit-log.service';
+// chỉnh lại path nếu khác dự án của bạn
+import { TokenStateService } from '../auth/token-state.service';
 
 @Injectable()
 export class MfaService {
   constructor(
     private prisma: PrismaService,
     private auditLogger: AuditLogService,
+    private tokenState: TokenStateService,
   ) {
     authenticator.options = {
       window: MFA_CONFIG.TOTP.WINDOW,
@@ -61,6 +64,12 @@ export class MfaService {
       },
     });
 
+    await this.auditLogger.log({
+      action: 'MFA_TOTP_ENROLL_STARTED',
+      actorId: userId,
+      entity: 'mfa',
+    });
+
     return { secret, otpauth, qrDataUrl };
   }
 
@@ -75,6 +84,11 @@ export class MfaService {
     const ok = authenticator.check(code, rec.totpSecret);
     if (!ok) {
       await this.incrementAttempts(userId);
+      await this.auditLogger.log({
+        action: 'MFA_TOTP_VERIFY_FAILED',
+        actorId: userId,
+        entity: 'mfa',
+      });
       throw new UnauthorizedException('Invalid TOTP');
     }
 
@@ -86,6 +100,15 @@ export class MfaService {
         verifyAttempts: 0,
         lastVerifyAt: new Date(),
       },
+    });
+
+    // bump av để đá AT cũ (an toàn sau thay đổi MFA)
+    await this.tokenState.bumpAccessVersion(userId);
+
+    await this.auditLogger.log({
+      action: 'MFA_TOTP_ENABLED',
+      actorId: userId,
+      entity: 'mfa',
     });
 
     return { enabled: true };
@@ -102,6 +125,11 @@ export class MfaService {
     const ok = authenticator.check(code, rec.totpSecret);
     if (!ok) {
       await this.incrementAttempts(userId);
+      await this.auditLogger.log({
+        action: 'MFA_TOTP_VERIFY_FAILED',
+        actorId: userId,
+        entity: 'mfa',
+      });
       throw new UnauthorizedException('Invalid TOTP');
     }
 
@@ -161,8 +189,8 @@ export class MfaService {
       throw new BadRequestException('MFA must be enabled first');
     }
 
-    // Generate một recovery key ngẫu nhiên
-    const key = crypto.randomBytes(32).toString('hex');
+    // Recovery key crypto-safe
+    const key = randomBytes(MFA_CONFIG.RECOVERY_KEY_LENGTH).toString('hex');
     const keyHash = await bcrypt.hash(key, MFA_CONFIG.BCRYPT_ROUNDS);
 
     await this.prisma.userMfa.update({
@@ -179,7 +207,7 @@ export class MfaService {
       entity: 'mfa',
     });
 
-    // CHỈ trả về một lần - FE cần hiển thị để user lưu
+    // CHỈ trả về một lần - FE hiển thị để user lưu
     return { recoveryKey: key };
   }
 
@@ -221,6 +249,9 @@ export class MfaService {
       }),
     ]);
 
+    // đá AT cũ
+    await this.tokenState.bumpAccessVersion(userId);
+
     await this.auditLogger.log({
       action: 'MFA_DISABLED_WITH_RECOVERY',
       actorId: userId,
@@ -253,6 +284,10 @@ export class MfaService {
       }),
       this.prisma.backupCode.deleteMany({ where: { userId } }),
     ]);
+
+    // đá AT cũ
+    await this.tokenState.bumpAccessVersion(userId);
+
     await this.auditLogger.log({
       action: 'MFA_DISABLED',
       actorId: userId,
@@ -263,7 +298,10 @@ export class MfaService {
   }
 
   // Backup codes
-  async generateBackupCodes(userId: string, count = 10) {
+  async generateBackupCodes(
+    userId: string,
+    count = MFA_CONFIG.BACKUP_CODE_COUNT,
+  ) {
     const has = await this.hasMfaEnabled(userId);
     if (!has) throw new BadRequestException('Enable MFA first');
 
@@ -288,16 +326,23 @@ export class MfaService {
       where: { userId, usedAt: null },
       select: { id: true, codeHash: true },
     });
+
     for (const r of list) {
       const ok = await bcrypt.compare(code, r.codeHash);
-      if (ok) {
-        await this.prisma.backupCode.update({
-          where: { id: r.id },
-          data: { usedAt: new Date() },
-        });
+      if (!ok) continue;
+
+      // CAS: chỉ đánh dấu usedAt nếu vẫn còn null (tránh double-use)
+      const res = await this.prisma.backupCode.updateMany({
+        where: { id: r.id, usedAt: null },
+        data: { usedAt: new Date() },
+      });
+
+      if (res.count === 1) {
         return { ok: true, consumedId: r.id };
       }
+      // nếu vừa bị ai đó "ăn" trước, thử cái tiếp theo
     }
+
     throw new UnauthorizedException('Invalid backup code');
   }
 
@@ -305,8 +350,7 @@ export class MfaService {
   private randCode(len = 10) {
     const abc = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     let s = '';
-    for (let i = 0; i < len; i++)
-      s += abc[Math.floor(Math.random() * abc.length)];
+    for (let i = 0; i < len; i++) s += abc[randomInt(0, abc.length)];
     return s;
   }
 }

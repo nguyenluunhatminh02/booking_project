@@ -1,3 +1,5 @@
+// src/common/filters/global-exception.filter.ts
+
 import {
   ExceptionFilter,
   Catch,

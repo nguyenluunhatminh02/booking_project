@@ -1,3 +1,5 @@
+// src/common/controllers/csrf.controller.ts
+
 import { Controller, Get, Req, Res } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { Public } from '../decorators/public.decorator';

@@ -73,6 +73,39 @@ export class AuthService {
   private pendingKey = (sid: string, oldHash: string) =>
     `${NS}:rt:pending:${sid}:${oldHash}`;
 
+  /** Singleflight lock theo (sid, oldHash) để tránh rotate trùng khi refresh đồng thời */
+  private async withRtRotateSingleflight<T>(
+    sid: string,
+    oldHash: string,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    if (!this.redis.enabled) return fn();
+    const lockKey = `${NS}:rotlock:${sid}:${oldHash}`;
+    const ttl = Math.max(this.refreshGraceSec, 5);
+
+    // try lock
+    const locked = await this.redis.set(lockKey, '1', {
+      nx: true,
+      ttlSec: ttl,
+    });
+    if (!locked) {
+      // đã có thằng khác rotate: chờ pending map xuất hiện
+      await new Promise((r) => setTimeout(r, 50));
+      const raw1 = await this.redis.get(this.pendingKey(sid, oldHash));
+      if (raw1) return JSON.parse(raw1);
+      await new Promise((r) => setTimeout(r, 80));
+      const raw2 = await this.redis.get(this.pendingKey(sid, oldHash));
+      if (raw2) return JSON.parse(raw2);
+      // fallthrough: chạy fn (rare)
+    }
+
+    try {
+      return await fn();
+    } finally {
+      await this.redis.del(lockKey).catch(() => {});
+    }
+  }
+
   private async signAccessToken(
     user: { id: string; email: string },
     opts?: { sessionId?: string },
@@ -80,7 +113,6 @@ export class AuthService {
     const av = await this.tokenState.getAccessVersion(user.id);
     const jti = crypto.randomUUID?.() ?? uuidv4();
 
-    // nhúng sid/sv nếu có
     const sid = opts?.sessionId;
     let sv: number | undefined;
     if (sid) {
@@ -130,7 +162,7 @@ export class AuthService {
         deviceId,
         refreshHash,
         tokenVersion: 0,
-        accessSv: 1, // NEW
+        accessSv: 1,
         expiresAt: refreshExpiresAt,
         ip: ctx?.ip,
         userAgent: ctx?.ua,
@@ -144,11 +176,6 @@ export class AuthService {
         ttlSec: this.refreshTtlSec,
         nx: true,
       });
-      // NEW: giữ session version trong Redis cùng TTL với RT
-      await this.redis.set(`${NS}:sv:${sessionId}`, '1', {
-        ttlSec: this.refreshTtlSec,
-        nx: true,
-      });
     }
 
     return { refreshToken, sessionId, refreshExpiresAt };
@@ -156,6 +183,7 @@ export class AuthService {
 
   /**
    * Rotate RT an toàn (CAS theo expectedOldHash).
+   * Nếu rotate thành công, ghi idempotent map (pendingKey) để các request khác đọc lại.
    */
   private async rotateRefreshTokenCAS(
     sessionId: string,
@@ -178,8 +206,7 @@ export class AuthService {
         id: sessionId,
         userId,
         refreshHash: expectedOldHash,
-        revokedAt: null, // NEW: không rotate nếu đã revoke
-        // approved: true,     // (tuỳ policy)
+        revokedAt: null,
       },
       data: {
         prevRefreshHash: expectedOldHash,
@@ -188,24 +215,15 @@ export class AuthService {
         tokenVersion: { increment: 1 },
         expiresAt,
         rotatedAt: new Date(),
-        // ❌ KHÔNG set revokedAt ở đây
       },
     });
 
     if (res.count !== 1) return { rotated: false };
 
     if (this.redis.enabled) {
-      // gia hạn alive-bit
       await this.redis.set(`${NS}:rt:${sessionId}`, '1', {
         ttlSec: this.refreshTtlSec,
       });
-      // NEW: gia hạn TTL cho sv cùng nhịp
-      const sv = (await this.redis.get(`${NS}:sv:${sessionId}`)) ?? '1';
-      await this.redis.set(`${NS}:sv:${sessionId}`, sv, {
-        ttlSec: this.refreshTtlSec,
-      });
-
-      // idempotency map trong grace window
       try {
         const p = JSON.stringify({
           refreshToken: newRefresh,
@@ -239,7 +257,6 @@ export class AuthService {
     if (this.redis.enabled) {
       try {
         await this.redis.del(`${NS}:rt:${sessionId}`);
-        await this.redis.del(`${NS}:sv:${sessionId}`); // NEW: dọn sv key
       } catch {
         /* empty */
       }
@@ -286,7 +303,6 @@ export class AuthService {
       throw e;
     }
 
-    // NEW: tạo session trước, rồi ký AT kèm sid/sv
     const { refreshToken, refreshExpiresAt, sessionId } =
       await this.createSessionAndRefreshToken(user.id, undefined, ctx);
     const { token: accessToken, exp } = await this.signAccessToken(user, {
@@ -370,7 +386,6 @@ export class AuthService {
       }
     }
 
-    // NEW: tạo session trước, rồi ký AT kèm sid/sv
     const { refreshToken, refreshExpiresAt, sessionId } =
       await this.createSessionAndRefreshToken(user.id, deviceId, ctx);
     const { token: accessToken, exp } = await this.signAccessToken(user, {
@@ -387,7 +402,7 @@ export class AuthService {
     };
   }
 
-  // ---------- REFRESH (concurrency-safe + idempotent) ----------
+  // ---------- REFRESH (concurrency-safe + idempotent + singleflight) ----------
   async refresh(refreshToken: string, ctx?: NetCtx) {
     const parts = splitRefreshToken(refreshToken);
     if (!parts) throw new UnauthorizedException('Malformed refresh token');
@@ -403,7 +418,7 @@ export class AuthService {
     }
 
     // Load session + user
-    let session = await this.prisma.userSession.findUnique({
+    const session = await this.prisma.userSession.findUnique({
       where: { id: sessionId },
       include: { user: { select: { id: true, email: true } } },
     });
@@ -411,12 +426,7 @@ export class AuthService {
       throw new UnauthorizedException('Session revoked');
     if (session.expiresAt <= now) {
       if (this.redis.enabled) {
-        try {
-          await this.redis.del(`${NS}:rt:${sessionId}`);
-          await this.redis.del(`${NS}:sv:${sessionId}`);
-        } catch {
-          /* empty */
-        }
+        await Promise.allSettled([this.redis.del(`${NS}:rt:${sessionId}`)]);
       }
       throw new UnauthorizedException('Session expired');
     }
@@ -432,7 +442,6 @@ export class AuthService {
         where: { id: session.id },
         data: { approved: false },
       });
-      // NEW: kill AT của đúng session ngay
       await this.tokenState.bumpSessionVersion(session.id);
       try {
         await this.das.issue(session.userId, session.id, {
@@ -440,176 +449,45 @@ export class AuthService {
           ua: ctx?.ua,
           fp: ctx?.deviceFp,
         });
-      } catch {
-        /* empty */
-      }
+      } catch {}
       throw new UnauthorizedException('Device approval required');
     }
 
-    // --- Case 1: match current hash -> try CAS rotate ---
+    // --- Case 1: match current hash -> singleflight rotate ---
     if (verifyRefreshPart(tokenPart, session.refreshHash)) {
       await this.prisma.userSession
         .update({ where: { id: sessionId }, data: { lastUsedAt: now } })
         .catch(() => {});
 
       const expectedOld = session.refreshHash;
-      const cas = await this.rotateRefreshTokenCAS(
+
+      const out = await this.withRtRotateSingleflight(
         sessionId,
-        session.userId,
         expectedOld,
-      );
-
-      if (cas.rotated) {
-        const { token: accessToken, exp } = await this.signAccessToken(
-          session.user,
-          { sessionId },
-        );
-        return {
-          accessToken,
-          accessTokenExpiresIn: this.accessTtlSec,
-          accessTokenExpSec: exp,
-          refreshToken: cas.refreshToken,
-          refreshExpiresAt: cas.expiresAt,
-        };
-      }
-
-      // CAS failed -> thử lấy idempotent (sid, expectedOldHash=A)
-      if (this.redis.enabled) {
-        const raw = await this.redis.get(
-          this.pendingKey(sessionId, expectedOld),
-        );
-        if (raw) {
-          try {
-            const parsed = JSON.parse(raw);
-            const { token: accessToken, exp } = await this.signAccessToken(
-              session.user,
-              { sessionId },
-            );
-            return {
-              accessToken,
-              accessTokenExpiresIn: this.accessTtlSec,
-              accessTokenExpSec: exp,
-              refreshToken: parsed.refreshToken as string,
-              refreshExpiresAt: new Date(parsed.refreshExpiresAt),
-            };
-          } catch {
-            /* empty */
-          }
-        }
-      }
-
-      // Fallback: reload & treat as inGrace
-      session = await this.prisma.userSession.findUnique({
-        where: { id: sessionId },
-        include: { user: { select: { id: true, email: true } } },
-      });
-      if (
-        session?.prevRefreshHash &&
-        session.prevExpiresAt &&
-        session.prevExpiresAt > now &&
-        verifyRefreshPart(tokenPart, session.prevRefreshHash)
-      ) {
-        await this.prisma.userSession
-          .update({
-            where: { id: sessionId },
-            data: {
-              lastUsedAt: now,
-              prevRefreshHash: null,
-              prevExpiresAt: null,
-            },
-          })
-          .catch(() => {});
-        if (this.redis.enabled) {
-          const raw = await this.redis.get(
-            this.pendingKey(sessionId, session.prevRefreshHash),
+        async () => {
+          const cas = await this.rotateRefreshTokenCAS(
+            sessionId,
+            session.userId,
+            expectedOld,
           );
-          if (raw) {
-            try {
-              const parsed = JSON.parse(raw);
-              const { token: accessToken, exp } = await this.signAccessToken(
-                session.user,
-                { sessionId },
-              );
-              return {
-                accessToken,
-                accessTokenExpiresIn: this.accessTtlSec,
-                accessTokenExpSec: exp,
-                refreshToken: parsed.refreshToken as string,
-                refreshExpiresAt: new Date(parsed.refreshExpiresAt),
-              };
-            } catch {
-              /* empty */
-            }
-          }
-        }
-        const cas2 = await this.rotateRefreshTokenCAS(
-          sessionId,
-          session.userId,
-          session.refreshHash,
-        );
-        if (!cas2.rotated)
-          throw new UnauthorizedException('Refresh conflict, try again');
-        const { token: accessToken, exp } = await this.signAccessToken(
-          session.user,
-          { sessionId },
-        );
-        return {
-          accessToken,
-          accessTokenExpiresIn: this.accessTtlSec,
-          accessTokenExpSec: exp,
-          refreshToken: cas2.refreshToken,
-          refreshExpiresAt: cas2.expiresAt,
-        };
-      }
-
-      if (!session) throw new UnauthorizedException('Invalid session');
-      await this.reusePenalty(session, ctx);
-    }
-
-    // --- Case 2: inGrace ngay từ đầu (client gửi prev) ---
-    const inGrace =
-      !!session.prevRefreshHash &&
-      !!session.prevExpiresAt &&
-      session.prevExpiresAt > now &&
-      verifyRefreshPart(tokenPart, session.prevRefreshHash);
-
-    if (inGrace) {
-      await this.prisma.userSession
-        .update({
-          where: { id: sessionId },
-          data: { lastUsedAt: now, prevRefreshHash: null, prevExpiresAt: null },
-        })
-        .catch(() => {});
-      if (this.redis.enabled) {
-        const raw = await this.redis.get(
-          this.pendingKey(sessionId, session.prevRefreshHash!),
-        );
-        if (raw) {
-          try {
-            const parsed = JSON.parse(raw);
-            const { token: accessToken, exp } = await this.signAccessToken(
-              session.user,
-              { sessionId },
-            );
+          if (cas.rotated) {
             return {
-              accessToken,
-              accessTokenExpiresIn: this.accessTtlSec,
-              accessTokenExpSec: exp,
-              refreshToken: parsed.refreshToken as string,
-              refreshExpiresAt: new Date(parsed.refreshExpiresAt),
+              refreshToken: cas.refreshToken,
+              refreshExpiresAt: cas.expiresAt.toISOString(),
             };
-          } catch {
-            /* empty */
           }
-        }
-      }
-      const cas = await this.rotateRefreshTokenCAS(
-        sessionId,
-        session.userId,
-        session.refreshHash,
+          // thử đọc idempotent map (pendingKey)
+          if (this.redis.enabled) {
+            const raw = await this.redis.get(
+              this.pendingKey(sessionId, expectedOld),
+            );
+            if (raw) return JSON.parse(raw);
+          }
+          // Fallback nhẹ: coi như conflict
+          throw new UnauthorizedException('Refresh conflict, try again');
+        },
       );
-      if (!cas.rotated)
-        throw new UnauthorizedException('Refresh conflict, try again');
+
       const { token: accessToken, exp } = await this.signAccessToken(
         session.user,
         { sessionId },
@@ -618,8 +496,98 @@ export class AuthService {
         accessToken,
         accessTokenExpiresIn: this.accessTtlSec,
         accessTokenExpSec: exp,
-        refreshToken: cas.refreshToken,
-        refreshExpiresAt: cas.expiresAt,
+        refreshToken: out.refreshToken,
+        refreshExpiresAt: new Date(out.refreshExpiresAt),
+      };
+    }
+
+    // --- Case 2: inGrace (client gửi prev ngay từ đầu) ---
+    const inGrace =
+      !!session.prevRefreshHash &&
+      !!session.prevExpiresAt &&
+      session.prevExpiresAt > now &&
+      verifyRefreshPart(tokenPart, session.prevRefreshHash);
+
+    if (inGrace) {
+      // 1) Ưu tiên lấy từ idempotent map trước (KHÔNG xoá prev* vội)
+      if (this.redis.enabled) {
+        const raw = await this.redis.get(
+          this.pendingKey(sessionId, session.prevRefreshHash!),
+        );
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          await this.prisma.userSession
+            .update({
+              where: { id: sessionId },
+              data: {
+                lastUsedAt: now,
+                prevRefreshHash: null,
+                prevExpiresAt: null,
+              },
+            })
+            .catch(() => {});
+          const { token: accessToken, exp } = await this.signAccessToken(
+            session.user,
+            { sessionId },
+          );
+          return {
+            accessToken,
+            accessTokenExpiresIn: this.accessTtlSec,
+            accessTokenExpSec: exp,
+            refreshToken: parsed.refreshToken as string,
+            refreshExpiresAt: new Date(parsed.refreshExpiresAt),
+          };
+        }
+      }
+
+      // 2) Singleflight rotate dựa trên current refreshHash
+      const out = await this.withRtRotateSingleflight(
+        sessionId,
+        session.refreshHash,
+        async () => {
+          const cas = await this.rotateRefreshTokenCAS(
+            sessionId,
+            session.userId,
+            session.refreshHash,
+          );
+          if (cas.rotated) {
+            return {
+              refreshToken: cas.refreshToken,
+              refreshExpiresAt: cas.expiresAt.toISOString(),
+            };
+          }
+          if (this.redis.enabled) {
+            const raw = await this.redis.get(
+              this.pendingKey(sessionId, session.refreshHash),
+            );
+            if (raw) return JSON.parse(raw);
+          }
+          throw new UnauthorizedException('Refresh conflict, try again');
+        },
+      );
+
+      // 3) Chỉ xoá prev* sau khi có kết quả
+      await this.prisma.userSession
+        .update({
+          where: { id: sessionId },
+          data: {
+            lastUsedAt: now,
+            prevRefreshHash: null,
+            prevExpiresAt: null,
+          },
+        })
+        .catch(() => {});
+
+      const { token: accessToken, exp } = await this.signAccessToken(
+        session.user,
+        { sessionId },
+      );
+      return {
+        accessToken,
+        accessTokenExpiresIn: this.accessTtlSec,
+        accessTokenExpSec: exp,
+        refreshToken: out.refreshToken,
+        refreshExpiresAt: new Date(out.refreshExpiresAt),
       };
     }
 
@@ -641,9 +609,7 @@ export class AuthService {
           note: 'reuse detected',
         });
       }
-    } catch {
-      /* empty */
-    }
+    } catch {}
     throw new UnauthorizedException('Invalid refresh token');
   }
 
@@ -679,27 +645,18 @@ export class AuthService {
           if (pipe) {
             for (const id of ids) {
               pipe.del(`${NS}:rt:${id}`);
-              pipe.del(`${NS}:sv:${id}`); // NEW: dọn sv key
             }
             await pipe.exec();
           } else {
             await Promise.all(
               ids.map((id) => this.redis.del(`${NS}:rt:${id}`)),
             );
-            await Promise.all(
-              ids.map((id) => this.redis.del(`${NS}:sv:${id}`)),
-            );
           }
-        } catch {
-          /* empty */
-        }
+        } catch {}
       }
     }
 
-    // Giữ semantics cũ: kill toàn bộ AT
     await this.tokenState.bumpAccessVersion(userId);
-    //  muốn giữ AT của session hiện tại, thì gọi:
-    // await this.tokenState.bumpSessionVersion(sessionsid);
     return { ok: true, revoked: ids.length };
   }
 
@@ -722,7 +679,6 @@ export class AuthService {
       const nowSec = Math.floor(Date.now() / 1000);
       if (exp <= nowSec) return { ok: true, alreadyExpired: true };
 
-      // đơn giản hoá: denylist chỉ theo jti
       await this.tokenState.denylistJti(
         jti,
         Math.min(exp, nowSec + MAX_DENY_TTL_SEC),

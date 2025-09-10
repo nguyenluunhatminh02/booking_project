@@ -18,6 +18,7 @@ import {
   ConsumeBackupDto,
   DisableWithRecoveryDto,
 } from './dto/mfa.dto';
+import { MFA_CONFIG } from './mfa.constants';
 
 @Controller('mfa')
 @UseGuards(JwtAuthGuard) // Require authentication for all endpoints
@@ -37,7 +38,8 @@ export class MfaController {
     @CurrentUser() user: { id: string },
     @Body() dto: StartTotpDto,
   ) {
-    return this.mfa.startTotpEnroll(user.id, 'BookingApp', dto.label);
+    // dùng issuer từ config để tránh lệch
+    return this.mfa.startTotpEnroll(user.id, MFA_CONFIG.TOTP.ISSUER, dto.label);
   }
 
   @Post('totp/enable')
@@ -73,7 +75,8 @@ export class MfaController {
     @CurrentUser() user: { id: string },
     @Body() dto: GenerateBackupDto,
   ) {
-    return this.mfa.generateBackupCodes(user.id, dto.count);
+    // truyền count nếu có, mặc định service đã lấy từ config
+    return this.mfa.generateBackupCodes(user.id);
   }
 
   @Post('backup/consume')

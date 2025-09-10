@@ -1,15 +1,17 @@
+// src/config/csrf.config.ts
+import type { CookieOptions } from 'express';
+
 export const CSRF_CONFIG = {
   cookie: {
-    key: 'XSRF-TOKEN',
-    httpOnly: false,
-    sameSite: 'strict' as const,
+    key: '__Host-csrf',
+    httpOnly: true,
+    sameSite: 'lax',
     secure: process.env.NODE_ENV === 'production',
     path: '/',
-  },
-  ignoredMethods: ['GET', 'HEAD', 'OPTIONS'],
+  } as CookieOptions & { key: string },
+  ignoredMethods: ['GET', 'HEAD', 'OPTIONS'] as const,
   ignoredPaths: [
-    '/api/auth/login',
-    '/api/auth/register',
+    // thường KHÔNG cần bỏ qua các GET này vì đã ignoreMethods
     '/api/health',
     '/api/metrics',
   ],

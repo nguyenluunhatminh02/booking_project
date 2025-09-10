@@ -1,3 +1,5 @@
+// src/common/middlewares/finger-print.middleware.ts
+
 import { Injectable, NestMiddleware } from '@nestjs/common';
 import { Request, Response, NextFunction } from 'express';
 import { DeviceFingerprintService } from '../finger-print.service';

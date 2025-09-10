@@ -95,4 +95,5 @@ main()
     console.error(e);
     process.exit(1);
   })
+  // eslint-disable-next-line @typescript-eslint/no-misused-promises
   .finally(() => prisma.$disconnect());

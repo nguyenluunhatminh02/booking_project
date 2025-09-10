@@ -1,4 +1,4 @@
-// rate-limit.guard.ts
+// src/common/guards/rate-limit.guard.ts
 import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { TokenBucketService } from '../token-bucket.service';

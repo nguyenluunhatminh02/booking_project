@@ -1,10 +1,13 @@
 // src/auth/auth.controller.ts
 import {
+  BadRequestException,
   Body,
   Controller,
+  Get,
   HttpCode,
   HttpStatus,
   Post,
+  Query,
   Req,
   Res,
   UnauthorizedException,
@@ -35,6 +38,13 @@ import { AuditInterceptor } from '../audit/audit.interceptor';
 import { Audit } from 'src/common/decorators/audit.decorator';
 import { DeviceApprovalService } from './device-approval.service';
 import { XssSanitize } from 'src/common/transforms/senitize-html.transform';
+
+const FE_OK_REDIRECT = process.env.FE_APPROVE_OK_URL || '';
+const FE_ERR_REDIRECT = process.env.FE_APPROVE_ERR_URL || '';
+const REDIRECT_WHITELIST = (process.env.APPROVE_REDIRECT_WHITELIST || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
 
 // =====================
 // DTOs
@@ -136,9 +146,47 @@ export class AuthController {
     return this.excludeRefreshToken(out);
   }
 
+  @Public()
+  @Get('approve-device')
+  async approveByQuery(
+    @Query('token') token: string,
+    @Query('redirect') redirect: string | undefined,
+    @Res() res: Response,
+  ) {
+    if (!token) throw new BadRequestException('Missing token');
+
+    const allow = (url?: string) => {
+      if (!url) return false;
+      try {
+        const u = new URL(url);
+        return REDIRECT_WHITELIST.some((p) => url.startsWith(p));
+      } catch {
+        return false;
+      }
+    };
+
+    try {
+      await this.das.approve(token);
+
+      // Ưu tiên redirect tùy chọn (nếu nằm trong whitelist)
+      if (allow(redirect)) return res.redirect(redirect as string);
+      // Nếu có FE_* trong .env thì redirect
+      if (FE_OK_REDIRECT) return res.redirect(FE_OK_REDIRECT);
+      // Fallback: trả HTML tối giản
+      return res.status(200).type('html').send(successHtml());
+    } catch {
+      if (allow(redirect)) return res.redirect(redirect as string);
+      if (FE_ERR_REDIRECT) return res.redirect(FE_ERR_REDIRECT);
+      return res.status(400).type('html').send(errorHtml());
+    }
+  }
+
+  /** POST /auth/approve-device { token } (tuỳ chọn: gọi API trực tiếp) */
+  @Public()
   @Post('approve-device')
-  async approve(@Body() dto: ApproveDeviceDto) {
-    return this.das.approve(dto.token);
+  @HttpCode(200)
+  async approveByBody(@Body() dto: ApproveDeviceDto) {
+    return this.das.approve(dto.token); // { ok: true, sessionId }
   }
 
   @Post('refresh')
@@ -171,14 +219,24 @@ export class AuthController {
     return { ok: true };
   }
 
-  @Post('logout-all')
   @UseGuards(JwtAuthGuard)
-  @HttpCode(HttpStatus.OK)
-  async logoutAll(@CurrentUserId() userId: string, @Body() dto: LogoutAllDto) {
-    if (!userId) {
-      return { ok: false, message: 'Missing userId' };
-    }
-    return this.auth.logoutAll(userId, dto.keepSessionId);
+  @Post('logout-others')
+  @HttpCode(200)
+  async logoutOthers(@Req() req: any) {
+    const userId: string = req.user?.sub;
+    const keepSid: string | undefined = req.user?.sid; // sid đã nhúng trong AT của bạn
+    const out = await this.auth.logoutAll(userId, keepSid);
+    return { ok: true, revoked: out.revoked };
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('logout-all')
+  @HttpCode(200)
+  async logoutAll(@Req() req: any, @Res({ passthrough: true }) res: Response) {
+    const userId: string = req.user?.sub;
+    const out = await this.auth.logoutAll(userId);
+    res.clearCookie(REFRESH_COOKIE_NAME, refreshCookieOptions);
+    return { ok: true, revoked: out.revoked };
   }
 
   @Post('revoke-access')
@@ -186,4 +244,31 @@ export class AuthController {
   async revokeAccess(@Body() dto: RevokeAccessDto) {
     return this.auth.revokeAccessToken(dto.accessToken);
   }
+}
+
+function successHtml() {
+  return `<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Device Approved</title>
+<style>body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;padding:24px;color:#111}</style>
+</head>
+<body>
+  <h2>✅ Device approved</h2>
+  <p>You can close this tab now.</p>
+  <script>setTimeout(()=>{ try{window.close()}catch(e){} },3000)</script>
+</body>
+</html>`;
+}
+
+function errorHtml() {
+  return `<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Invalid or expired</title>
+<style>body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;padding:24px;color:#111}</style>
+</head>
+<body>
+  <h2>❌ Invalid or expired token</h2>
+  <p>Please request a new approval link.</p>
+</body>
+</html>`;
 }

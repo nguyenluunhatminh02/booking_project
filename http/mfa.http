@@ -1,49 +1,679 @@
-@base = http://localhost:3000
-@json = application/json
-@token = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdiI6MSwiaWF0IjoxNzU2ODM2OTcyLCJleHAiOjE3NTY4Mzc4NzIsImF1ZCI6ImJvb2tpbmctZmUiLCJpc3MiOiJib29raW5nLWFwaSIsInN1YiI6IjNlNDA4YTJjLWFmNzctNDM5MS1hODY5LTdlYjZkYzAzNjI3NiIsImp0aSI6ImI1ZTc3YWVmLTYwNjYtNDcwZC1hNDhkLTkxNDk4YmFiM2Y0OCJ9.sb5vtSAJB_xynDgGjqssNPE1fibaJDYiuv7asXEeXU0
+### ==========================================================================
+### BOOKING PROJECT - MFA (MULTI-FACTOR AUTHENTICATION) API TEST SUITE
+### ==========================================================================
+### Base URL Configuration
+@baseUrl = http://localhost:3000
+@contentType = application/json
 
-### Login lấy token (user thường)
-POST {{base}}/auth/login
-Content-Type: {{json}}
+### Variables (update these as needed)
+@userEmail = test@example.com
+@userPassword = SecurePass123!
 
-{ "email": "user@example.com", "password": "User@123456", "deviceId": "web-1" }
+### Authentication tokens (get these from auth.http tests first)
+@accessToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+@refreshToken = session-id.token-part
 
+### MFA Testing Variables
+@totpCode = 123456
+@backupCode = ABCD1234EF
+@recoveryKey = 1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef
 
-### Xem trạng thái MFA
-GET {{base}}/mfa/status
-Authorization: {{token}}
+### ==========================================================================
+### PREREQUISITE: LOGIN TO GET ACCESS TOKEN
+### ==========================================================================
 
-### Bắt đầu enroll TOTP (trả secret + otpauth + qrDataUrl)
-POST {{base}}/mfa/totp/start
-Authorization: {{token}}
-Content-Type: {{json}}
+### Login First (copy from auth.http)
+POST {{baseUrl}}/auth/login
+Content-Type: {{contentType}}
 
-{ "issuer": "BookingApp", "label": "user@example.com" }
+{
+  "email": "{{userEmail}}",
+  "password": "{{userPassword}}"
+}
 
-### Enable TOTP (nhập code từ app Authenticator)
-POST {{base}}/mfa/totp/enable
-Authorization: Bearer {{token}}
-Content-Type: {{json}}
+### ==========================================================================
+### MFA STATUS & INITIALIZATION
+### ==========================================================================
 
-{ "code": "123456" }
+### Get Current MFA Status
+GET {{baseUrl}}/mfa/status
+Authorization: Bearer {{accessToken}}
 
-### Generate backup codes
-POST {{base}}/mfa/backup/generate
-Authorization: Bearer {{token}}
-Content-Type: {{json}}
+### ==========================================================================
+### TOTP (TIME-BASED ONE-TIME PASSWORD) SETUP
+### ==========================================================================
 
-{ "count": 10 }
+### Start TOTP Enrollment (Get QR Code)
+POST {{baseUrl}}/mfa/totp/start
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
 
-### Verify TOTPs (test)
-POST {{base}}/mfa/totp/verify
-Authorization: Bearer {{token}}
-Content-Type: {{json}}
+{
+  "issuer": "BookingApp",
+  "label": "{{userEmail}}"
+}
 
-{ "code": "123456" }
+### Start TOTP with Custom Label
+POST {{baseUrl}}/mfa/totp/start
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
 
-### Disable TOTP (bằng code hoặc backup code)
-POST {{base}}/mfa/totp/disable
-Authorization: Bearer {{token}}
-Content-Type: {{json}}
+{
+  "issuer": "BookingApp Dev",
+  "label": "dev-account"
+}
 
-{ "code": "123456" }
+### Start TOTP - Minimal Request (using defaults)
+POST {{baseUrl}}/mfa/totp/start
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{}
+
+### Enable TOTP (After scanning QR code and getting TOTP from authenticator app)
+POST {{baseUrl}}/mfa/totp/enable
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "code": "{{totpCode}}"
+}
+
+### Enable TOTP - Invalid Code (should fail)
+POST {{baseUrl}}/mfa/totp/enable
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "code": "000000"
+}
+
+### Enable TOTP - Malformed Code (should fail)
+POST {{baseUrl}}/mfa/totp/enable
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "code": "12345"
+}
+
+### ==========================================================================
+### TOTP VERIFICATION (After TOTP is enabled)
+### ==========================================================================
+
+### Verify TOTP Code - Success
+POST {{baseUrl}}/mfa/totp/verify
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "code": "{{totpCode}}"
+}
+
+### Verify TOTP Code - Invalid Code
+POST {{baseUrl}}/mfa/totp/verify
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "code": "000000"
+}
+
+### Verify TOTP Code - Expired Code (use old code)
+POST {{baseUrl}}/mfa/totp/verify
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "code": "999999"
+}
+
+### Verify TOTP Code - Empty Code
+POST {{baseUrl}}/mfa/totp/verify
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "code": ""
+}
+
+### ==========================================================================
+### BACKUP CODES MANAGEMENT
+### ==========================================================================
+
+### Generate Backup Codes (Default count: 10)
+POST {{baseUrl}}/mfa/backup/generate
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{}
+
+### Generate Backup Codes with Custom Count
+POST {{baseUrl}}/mfa/backup/generate
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "count": 15
+}
+
+### Generate Backup Codes - Minimum Count
+POST {{baseUrl}}/mfa/backup/generate
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "count": 5
+}
+
+### Generate Backup Codes - Maximum Count
+POST {{baseUrl}}/mfa/backup/generate
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "count": 20
+}
+
+### Generate Backup Codes - Invalid Count (too low)
+POST {{baseUrl}}/mfa/backup/generate
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "count": 2
+}
+
+### Generate Backup Codes - Invalid Count (too high)
+POST {{baseUrl}}/mfa/backup/generate
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "count": 25
+}
+
+### ==========================================================================
+### BACKUP CODE CONSUMPTION
+### ==========================================================================
+
+### Consume Backup Code - Success
+POST {{baseUrl}}/mfa/backup/consume
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "code": "{{backupCode}}"
+}
+
+### Consume Backup Code - Invalid Code
+POST {{baseUrl}}/mfa/backup/consume
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "code": "INVALID123"
+}
+
+### Consume Backup Code - Already Used Code (should fail)
+POST {{baseUrl}}/mfa/backup/consume
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "code": "{{backupCode}}"
+}
+
+### Consume Backup Code - Malformed Code
+POST {{baseUrl}}/mfa/backup/consume
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "code": "123"
+}
+
+### Consume Backup Code - Empty Code
+POST {{baseUrl}}/mfa/backup/consume
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "code": ""
+}
+
+### ==========================================================================
+### RECOVERY KEY MANAGEMENT
+### ==========================================================================
+
+### Generate Recovery Key
+POST {{baseUrl}}/mfa/recovery/generate
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+### Generate Recovery Key - Multiple Times (should work)
+POST {{baseUrl}}/mfa/recovery/generate
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+### ==========================================================================
+### MFA DISABLE OPERATIONS
+### ==========================================================================
+
+### Disable TOTP with TOTP Code
+POST {{baseUrl}}/mfa/totp/disable
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "code": "{{totpCode}}"
+}
+
+### Disable TOTP with Backup Code
+POST {{baseUrl}}/mfa/totp/disable
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "backupCode": "{{backupCode}}"
+}
+
+### Disable TOTP with Invalid TOTP Code
+POST {{baseUrl}}/mfa/totp/disable
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "code": "000000"
+}
+
+### Disable TOTP with Invalid Backup Code
+POST {{baseUrl}}/mfa/totp/disable
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "backupCode": "INVALID123"
+}
+
+### Disable TOTP without Any Verification (should fail)
+POST {{baseUrl}}/mfa/totp/disable
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{}
+
+### ==========================================================================
+### RECOVERY KEY DISABLE
+### ==========================================================================
+
+### Disable MFA with Recovery Key
+POST {{baseUrl}}/mfa/recovery/disable
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "recoveryKey": "{{recoveryKey}}"
+}
+
+### Disable MFA with Invalid Recovery Key
+POST {{baseUrl}}/mfa/recovery/disable
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "recoveryKey": "invalidkey123"
+}
+
+### Disable MFA with Already Used Recovery Key (should fail)
+POST {{baseUrl}}/mfa/recovery/disable
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "recoveryKey": "{{recoveryKey}}"
+}
+
+### Disable MFA with Empty Recovery Key
+POST {{baseUrl}}/mfa/recovery/disable
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "recoveryKey": ""
+}
+
+### ==========================================================================
+### ERROR SCENARIOS & EDGE CASES
+### ==========================================================================
+
+### Try MFA Operations Without Authentication (401 Unauthorized)
+GET {{baseUrl}}/mfa/status
+
+### Try TOTP Start When Already Enabled (should handle gracefully)
+POST {{baseUrl}}/mfa/totp/start
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "issuer": "BookingApp",
+  "label": "{{userEmail}}"
+}
+
+### Try Enable TOTP When Already Enabled (should fail)
+POST {{baseUrl}}/mfa/totp/enable
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "code": "{{totpCode}}"
+}
+
+### Try Generate Backup Codes Without MFA Enabled (should fail)
+POST {{baseUrl}}/mfa/backup/generate
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{}
+
+### Try Consume Backup Code Without MFA Enabled (should fail)
+POST {{baseUrl}}/mfa/backup/consume
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "code": "{{backupCode}}"
+}
+
+### Try Generate Recovery Key Without MFA Enabled (should fail)
+POST {{baseUrl}}/mfa/recovery/generate
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+### Try Disable with Recovery Key When None Generated (should fail)
+POST {{baseUrl}}/mfa/recovery/disable
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "recoveryKey": "{{recoveryKey}}"
+}
+
+### ==========================================================================
+### RATE LIMITING TESTS (Multiple Failed Attempts)
+### ==========================================================================
+
+### Multiple Failed TOTP Verifications (should trigger rate limiting)
+POST {{baseUrl}}/mfa/totp/verify
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "code": "000001"
+}
+
+###
+POST {{baseUrl}}/mfa/totp/verify
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "code": "000002"
+}
+
+###
+POST {{baseUrl}}/mfa/totp/verify
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "code": "000003"
+}
+
+###
+POST {{baseUrl}}/mfa/totp/verify
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "code": "000004"
+}
+
+### This should trigger rate limiting
+POST {{baseUrl}}/mfa/totp/verify
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "code": "000005"
+}
+
+### ==========================================================================
+### COMPREHENSIVE MFA WORKFLOW TESTING
+### ==========================================================================
+
+### Complete MFA Setup Flow
+### 1. Check initial status (should be disabled)
+GET {{baseUrl}}/mfa/status
+Authorization: Bearer {{accessToken}}
+
+### 2. Start TOTP setup
+POST {{baseUrl}}/mfa/totp/start
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "issuer": "BookingApp Test",
+  "label": "{{userEmail}}"
+}
+
+### 3. Enable TOTP (use actual code from authenticator app)
+### Note: Replace {{totpCode}} with actual code from your authenticator app
+POST {{baseUrl}}/mfa/totp/enable
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "code": "{{totpCode}}"
+}
+
+### 4. Verify status is now enabled
+GET {{baseUrl}}/mfa/status
+Authorization: Bearer {{accessToken}}
+
+### 5. Generate backup codes
+POST {{baseUrl}}/mfa/backup/generate
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "count": 10
+}
+
+### 6. Generate recovery key
+POST {{baseUrl}}/mfa/recovery/generate
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+### 7. Test TOTP verification
+POST {{baseUrl}}/mfa/totp/verify
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "code": "{{totpCode}}"
+}
+
+### 8. Test backup code consumption
+POST {{baseUrl}}/mfa/backup/consume
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "code": "{{backupCode}}"
+}
+
+### ==========================================================================
+### SECURITY TESTING
+### ==========================================================================
+
+### Test with Expired Token (should fail with 401)
+POST {{baseUrl}}/mfa/status
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.expired.token
+
+### Test with Malformed Token (should fail with 401)
+POST {{baseUrl}}/mfa/status
+Authorization: Bearer invalid.token.here
+
+### Test with Missing Authorization Header (should fail with 401)
+POST {{baseUrl}}/mfa/status
+Content-Type: {{contentType}}
+
+### ==========================================================================
+### DATA VALIDATION TESTING
+### ==========================================================================
+
+### Invalid JSON Body
+POST {{baseUrl}}/mfa/totp/enable
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{ invalid json }
+
+### Missing Required Fields
+POST {{baseUrl}}/mfa/totp/enable
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{}
+
+### Wrong Data Types
+POST {{baseUrl}}/mfa/backup/generate
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "count": "not_a_number"
+}
+
+### SQL Injection Attempt (should be handled safely)
+POST {{baseUrl}}/mfa/totp/verify
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "code": "'; DROP TABLE users; --"
+}
+
+### XSS Attempt (should be sanitized)
+POST {{baseUrl}}/mfa/backup/consume
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "code": "<script>alert('xss')</script>"
+}
+
+### Large Payload Test
+POST {{baseUrl}}/mfa/totp/start
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "issuer": "BookingApp",
+  "label": "very_long_label_that_exceeds_normal_limits_and_may_cause_issues_in_some_systems_this_is_a_test_to_see_how_the_system_handles_large_inputs_and_whether_it_validates_properly_or_truncates_or_rejects_the_input_altogether"
+}
+
+### ==========================================================================
+### CONCURRENT REQUEST TESTING
+### ==========================================================================
+
+### Simulate concurrent TOTP verifications (run simultaneously)
+POST {{baseUrl}}/mfa/totp/verify
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "code": "{{totpCode}}"
+}
+
+###
+POST {{baseUrl}}/mfa/totp/verify
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "code": "{{totpCode}}"
+}
+
+### Simulate concurrent backup code generation
+POST {{baseUrl}}/mfa/backup/generate
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{}
+
+###
+POST {{baseUrl}}/mfa/backup/generate
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{}
+
+### ==========================================================================
+### CLEANUP OPERATIONS
+### ==========================================================================
+
+### Final Status Check
+GET {{baseUrl}}/mfa/status
+Authorization: Bearer {{accessToken}}
+
+### Disable MFA (cleanup for next test run)
+POST {{baseUrl}}/mfa/totp/disable
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "code": "{{totpCode}}"
+}
+
+### Verify MFA is Disabled
+GET {{baseUrl}}/mfa/status
+Authorization: Bearer {{accessToken}}
+
+### ==========================================================================
+### NOTES FOR TESTING
+### ==========================================================================
+#
+# MFA Testing Workflow:
+# 1. First run auth.http to get valid access token
+# 2. Update @accessToken variable with the token from step 1
+# 3. Install a TOTP app (Google Authenticator, Authy, etc.)
+# 4. Run TOTP setup endpoint to get QR code or secret
+# 5. Scan QR code or manually enter secret in TOTP app
+# 6. Get current TOTP code from app and update @totpCode variable
+# 7. Run enable TOTP endpoint with the current code
+# 8. Generate backup codes and save one for @backupCode variable
+# 9. Generate recovery key and save for @recoveryKey variable
+# 10. Test various MFA operations
+#
+# Important Notes:
+# - TOTP codes expire every 30 seconds, get fresh codes from app
+# - Backup codes can only be used once
+# - Recovery keys can only be used once
+# - Rate limiting applies after multiple failed attempts
+# - MFA must be enabled before testing backup codes/recovery
+#
+# Test Categories Covered:
+# ✅ TOTP setup and verification
+# ✅ Backup code generation and consumption
+# ✅ Recovery key generation and usage
+# ✅ MFA disable operations
+# ✅ Rate limiting validation
+# ✅ Error handling and edge cases
+# ✅ Security testing (XSS, SQL injection, etc.)
+# ✅ Data validation testing
+# ✅ Concurrent request handling
+# ✅ Authentication and authorization
+#
+### ==========================================================================

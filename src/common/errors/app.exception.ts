@@ -38,6 +38,7 @@ export interface AppProblem {
   status: number;
   code: AppErrorCode;
   detail?: string;
+  headers?: Record<string, string | number>;
   instance?: string;
   // Extensions (tuỳ case dùng)
   retryAfterSec?: number;

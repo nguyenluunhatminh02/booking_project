@@ -11,6 +11,7 @@ import {
 import { Request, Response } from 'express';
 import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
 import { TokenExpiredError, JsonWebTokenError } from 'jsonwebtoken';
+import { AppException } from '../errors/app.exception';
 
 export interface ErrorResponse {
   success: false;
@@ -43,6 +44,17 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     const response = ctx.getResponse<Response>();
     const request = ctx.getRequest<Request>();
 
+    // Nếu là AppException -> map sang ErrorResponse + set headers
+    if (exception instanceof AppException) {
+      const errorResponse = this.handleAppException(
+        exception,
+        request,
+        response,
+      );
+      response.status(errorResponse.error.statusCode).json(errorResponse);
+      return;
+    }
+
     const errorResponse = this.buildErrorResponse(exception, request);
 
     // Log error with appropriate level
@@ -50,6 +62,56 @@ export class GlobalExceptionFilter implements ExceptionFilter {
 
     // Send response
     response.status(errorResponse.error.statusCode).json(errorResponse);
+  }
+
+  private handleAppException(
+    exception: AppException,
+    request: Request,
+    response: Response,
+  ): ErrorResponse {
+    const timestamp = new Date().toISOString();
+    const path = request.path;
+    const method = request.method;
+    const requestId =
+      (request as any).id || (request.headers['x-request-id'] as string);
+
+    // Set headers nếu có
+    const prob = exception.problem;
+    if (prob.retryAfterSec != null) {
+      response.setHeader('Retry-After', String(prob.retryAfterSec));
+    }
+    if (prob.headers && typeof prob.headers === 'object') {
+      for (const [k, v] of Object.entries(prob.headers)) {
+        response.setHeader(k, String(v));
+      }
+    }
+
+    const status = exception.getStatus();
+    // Ưu tiên detail làm message, fallback title
+    const message = prob.detail || prob.title;
+
+    return {
+      success: false,
+      error: {
+        code: prob.code, // ⬅️ giữ code ổn định cho client
+        message,
+        details: prob.fieldErrors
+          ? { fieldErrors: prob.fieldErrors }
+          : undefined,
+        statusCode: status,
+        timestamp,
+        path,
+        method,
+        requestId,
+      },
+      meta: {
+        timestamp,
+        path,
+        method,
+        requestId,
+        statusCode: status,
+      },
+    };
   }
 
   private buildErrorResponse(

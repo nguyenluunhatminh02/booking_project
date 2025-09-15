@@ -1,155 +1,671 @@
-@base = http://localhost:3000
-@json = application/json
+### ==========================================================================
+### BOOKING PROJECT - RBAC (ROLE-BASED ACCESS CONTROL) API TEST SUITE
+### ==========================================================================
+### Base URL Configuration
+@baseUrl = http://localhost:3000
+@contentType = application/json
 
-# Dán access token của admin (có quyền Role.manage / Permission.manage)
-@adminToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdiI6MSwiaWF0IjoxNzU2NTY5MTM2LCJleHAiOjE3NTY1NzAwMzYsImF1ZCI6ImJvb2tpbmctZmUiLCJpc3MiOiJib29raW5nLWFwaSIsInN1YiI6ImU0MTA0ZjRjLTc4M2ItNDg3OS1iMzY1LWNkMjJhZmY3MWYwZSIsImp0aSI6IjljZDMwZjliLWU0NmYtNDUzNS1iOGIxLTJmMGQ0ZGUzMWQ1ZiJ9.mo_IDEmLvfgciiYUKHrXZ4htVwy9XTmk1TMlHE9UbcY"
+### Variables (update these as needed)
+@userEmail = admin@example.com
+@userPassword = SecurePass123!
 
-# Dán access token của user thường để test (không cần quyền admin)
-@userToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdiI6MSwiaWF0IjoxNzU2NTY5MTkwLCJleHAiOjE3NTY1NzAwOTAsImF1ZCI6ImJvb2tpbmctZmUiLCJpc3MiOiJib29raW5nLWFwaSIsInN1YiI6Ijk5MjQxZTVjLTRjYTQtNDg0YS04MDAyLTU4ZTdlNjc5MTBkYyIsImp0aSI6IjJlYjU1M2VkLTFhZTUtNGUxMS1iY2QwLTc3YWJkYjE1NWRiMyJ9.HYZEqMLsacm4mQCEZveED5SS-IHNZTX4YQwTLxvRbWM"
+### Authentication tokens (get these from auth.http tests first)
+@accessToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
-# IDs mẫu (điền đúng theo DB của bạn)
-@userId = "99241e5c-4ca4-484a-8002-58e7e67910dc"
-@roleIdAdmin = {{ROLE_ID_ADMIN}}
-@roleIdEditor = {{ROLE_ID_EDITOR}}
-@roleIdViewer = {{ROLE_ID_VIEWER}}
-@resourceId = {{PROPERTY_ID}}  # id bản ghi Property để test ACL
+### RBAC Test Variables (replace with actual IDs)
+@userId = 550e8400-e29b-41d4-a716-446655440000
+@roleId = 660e8400-e29b-41d4-a716-446655440001
+@adminRoleId = 770e8400-e29b-41d4-a716-446655440002
+@managerRoleId = 880e8400-e29b-41d4-a716-446655440003
+@propertyId = 990e8400-e29b-41d4-a716-446655440004
 
+### ==========================================================================
+### PREREQUISITE: LOGIN TO GET ACCESS TOKEN
+### ==========================================================================
 
-### =======================
-### (TUỲ CHỌN) SEED RBAC NHẸ
-### =======================
-# Nếu bạn có sẵn endpoint seed (hoặc chạy prisma/seed.rbac.ts bằng script npm)
-# POST {{base}}/admin/seed/rbac
-# Authorization: Bearer {{adminToken}}
+### Login as Admin (copy from auth.http)
+POST {{baseUrl}}/auth/login
+Content-Type: {{contentType}}
 
+{
+  "email": "{{userEmail}}",
+  "password": "{{userPassword}}"
+}
 
-### =======================
-### ROLE ↔ USER
-### =======================
+### ==========================================================================
+### USER ROLE MANAGEMENT
+### ==========================================================================
 
-### Gán role EDITOR cho user
-POST {{base}}/admin/rbac/add-role
-Authorization: Bearer {{adminToken}}
-Content-Type: {{json}}
+### Add Role to User
+POST {{baseUrl}}/admin/rbac/add-role
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
 
 {
   "userId": "{{userId}}",
-  "roleId": "{{roleIdEditor}}"
+  "roleId": "{{roleId}}"
 }
 
-### Bỏ role EDITOR khỏi user
-POST {{base}}/admin/rbac/remove-role
-Authorization: Bearer {{adminToken}}
-Content-Type: {{json}}
+### Add Admin Role to User
+POST {{baseUrl}}/admin/rbac/add-role
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
 
 {
   "userId": "{{userId}}",
-  "roleId": "{{roleIdEditor}}"
+  "roleId": "{{adminRoleId}}"
 }
 
-
-### =======================
-### ROLE ↔ PERMISSION (type-safe ở backend; HTTP body vẫn là string)
-### =======================
-
-### Thêm quyền Property:read vào role EDITOR
-POST {{base}}/admin/rbac/role/add-permission
-Authorization: Bearer {{adminToken}}
-Content-Type: {{json}}
+### Add Manager Role to User
+POST {{baseUrl}}/admin/rbac/add-role
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
 
 {
-  "roleId": "{{roleIdEditor}}",
+  "userId": "{{userId}}",
+  "roleId": "{{managerRoleId}}"
+}
+
+### Remove Role from User
+POST {{baseUrl}}/admin/rbac/remove-role
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "userId": "{{userId}}",
+  "roleId": "{{roleId}}"
+}
+
+### List User Roles
+GET {{baseUrl}}/admin/rbac/user/{{userId}}/roles
+Authorization: Bearer {{accessToken}}
+
+### List User Roles - Non-existent User (404 or empty)
+GET {{baseUrl}}/admin/rbac/user/00000000-0000-0000-0000-000000000000/roles
+Authorization: Bearer {{accessToken}}
+
+### ==========================================================================
+### ROLE PERMISSION MANAGEMENT
+### ==========================================================================
+
+### Add Permission to Role - Property Management
+POST {{baseUrl}}/admin/rbac/role/add-permission
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "roleId": "{{roleId}}",
+  "subject": "Property",
+  "action": "create"
+}
+
+### Add Permission to Role - Property Read
+POST {{baseUrl}}/admin/rbac/role/add-permission
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "roleId": "{{roleId}}",
   "subject": "Property",
   "action": "read"
 }
 
-### Thêm quyền Property:update vào role EDITOR
-POST {{base}}/admin/rbac/role/add-permission
-Authorization: Bearer {{adminToken}}
-Content-Type: {{json}}
+### Add Permission to Role - Property Update
+POST {{baseUrl}}/admin/rbac/role/add-permission
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
 
 {
-  "roleId": "{{roleIdEditor}}",
+  "roleId": "{{roleId}}",
   "subject": "Property",
   "action": "update"
 }
 
-### Bỏ quyền Property:update khỏi role EDITOR
-POST {{base}}/admin/rbac/role/remove-permission
-Authorization: Bearer {{adminToken}}
-Content-Type: {{json}}
+### Add Permission to Role - User Management
+POST {{baseUrl}}/admin/rbac/role/add-permission
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
 
 {
-  "roleId": "{{roleIdEditor}}",
-  "subject": "Property",
-  "action": "update"
+  "roleId": "{{adminRoleId}}",
+  "subject": "User",
+  "action": "manage"
 }
 
+### Add Permission to Role - Role Management
+POST {{baseUrl}}/admin/rbac/role/add-permission
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
 
-### =======================
-### ACL THEO BẢN GHI (ALLOW / DENY)
-### =======================
+{
+  "roleId": "{{adminRoleId}}",
+  "subject": "Role",
+  "action": "manage"
+}
 
-### Cấp ALLOW: cho user được delete bản ghi Property cụ thể
-POST {{base}}/admin/rbac/grant-acl
-Authorization: Bearer {{adminToken}}
-Content-Type: {{json}}
+### Add Permission to Role - Permission Management
+POST {{baseUrl}}/admin/rbac/role/add-permission
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "roleId": "{{adminRoleId}}",
+  "subject": "Permission",
+  "action": "manage"
+}
+
+### Add Permission to Role - Booking Management
+POST {{baseUrl}}/admin/rbac/role/add-permission
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "roleId": "{{managerRoleId}}",
+  "subject": "Booking",
+  "action": "manage"
+}
+
+### Add Permission to Role - Audit Log Read
+POST {{baseUrl}}/admin/rbac/role/add-permission
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "roleId": "{{managerRoleId}}",
+  "subject": "AuditLog",
+  "action": "read"
+}
+
+### Remove Permission from Role
+POST {{baseUrl}}/admin/rbac/role/remove-permission
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "roleId": "{{roleId}}",
+  "subject": "Property",
+  "action": "delete"
+}
+
+### List Role Permissions
+GET {{baseUrl}}/admin/rbac/role/{{roleId}}/permissions
+Authorization: Bearer {{accessToken}}
+
+### List Admin Role Permissions
+GET {{baseUrl}}/admin/rbac/role/{{adminRoleId}}/permissions
+Authorization: Bearer {{accessToken}}
+
+### List Manager Role Permissions
+GET {{baseUrl}}/admin/rbac/role/{{managerRoleId}}/permissions
+Authorization: Bearer {{accessToken}}
+
+### List Role Permissions - Non-existent Role
+GET {{baseUrl}}/admin/rbac/role/00000000-0000-0000-0000-000000000000/permissions
+Authorization: Bearer {{accessToken}}
+
+### ==========================================================================
+### ACL (ACCESS CONTROL LIST) MANAGEMENT
+### ==========================================================================
+
+### Grant ACL Permission - Allow Property Update
+POST {{baseUrl}}/admin/rbac/grant-acl
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
 
 {
   "userId": "{{userId}}",
   "resourceType": "Property",
-  "resourceId": "{{resourceId}}",
-  "action": "delete",
+  "resourceId": "{{propertyId}}",
+  "action": "update",
   "effect": "ALLOW"
 }
 
-### Cấp DENY: chặn user update bản ghi Property cụ thể
-POST {{base}}/admin/rbac/grant-acl
-Authorization: Bearer {{adminToken}}
-Content-Type: {{json}}
+### Grant ACL Permission - Allow Property Read
+POST {{baseUrl}}/admin/rbac/grant-acl
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
 
 {
   "userId": "{{userId}}",
   "resourceType": "Property",
-  "resourceId": "{{resourceId}}",
-  "action": "update",
+  "resourceId": "{{propertyId}}",
+  "action": "read",
+  "effect": "ALLOW"
+}
+
+### Grant ACL Permission - Deny Property Delete
+POST {{baseUrl}}/admin/rbac/grant-acl
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "userId": "{{userId}}",
+  "resourceType": "Property",
+  "resourceId": "{{propertyId}}",
+  "action": "delete",
   "effect": "DENY"
 }
 
-### Thu hồi ACL (xóa rule) — ví dụ bỏ DENY update
-POST {{base}}/admin/rbac/revoke-acl
-Authorization: Bearer {{adminToken}}
-Content-Type: {{json}}
+### Grant ACL Permission - User Management
+POST {{baseUrl}}/admin/rbac/grant-acl
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "userId": "{{userId}}",
+  "resourceType": "User",
+  "resourceId": "{{userId}}",
+  "action": "update",
+  "effect": "ALLOW"
+}
+
+### Revoke ACL Permission
+POST {{baseUrl}}/admin/rbac/revoke-acl
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
 
 {
   "userId": "{{userId}}",
   "resourceType": "Property",
-  "resourceId": "{{resourceId}}",
+  "resourceId": "{{propertyId}}",
+  "action": "delete"
+}
+
+### List ACL for User (All Resources)
+GET {{baseUrl}}/admin/rbac/acl?userId={{userId}}
+Authorization: Bearer {{accessToken}}
+
+### List ACL for User (Property Resources Only)
+GET {{baseUrl}}/admin/rbac/acl?userId={{userId}}&resourceType=property
+Authorization: Bearer {{accessToken}}
+
+### List ACL for User (Specific Property)
+GET {{baseUrl}}/admin/rbac/acl?userId={{userId}}&resourceType=property&resourceId={{propertyId}}
+Authorization: Bearer {{accessToken}}
+
+### List ACL for User (Non-existent User)
+GET {{baseUrl}}/admin/rbac/acl?userId=00000000-0000-0000-0000-000000000000
+Authorization: Bearer {{accessToken}}
+
+### ==========================================================================
+### PERMISSION DEBUGGING & OBSERVABILITY
+### ==========================================================================
+
+### Debug User Permissions (Basic)
+GET {{baseUrl}}/admin/rbac/debug/perms?userId={{userId}}
+Authorization: Bearer {{accessToken}}
+
+### Debug User Permissions with Scope
+GET {{baseUrl}}/admin/rbac/debug/perms?userId={{userId}}&scopeKey=GLOBAL
+Authorization: Bearer {{accessToken}}
+
+### Debug User Permissions with Resource Context
+GET {{baseUrl}}/admin/rbac/debug/perms?userId={{userId}}&resourceType=Property&resourceId={{propertyId}}
+Authorization: Bearer {{accessToken}}
+
+### Debug User Permissions with Needed Permissions Check
+GET {{baseUrl}}/admin/rbac/debug/perms?userId={{userId}}&needed=Property:read,Property:update,Property:delete
+Authorization: Bearer {{accessToken}}
+
+### Debug User Permissions with Complex Check
+GET {{baseUrl}}/admin/rbac/debug/perms?userId={{userId}}&scopeKey=GLOBAL&resourceType=Property&resourceId={{propertyId}}&needed=Property:read,Property:update,Property:delete,User:manage
+Authorization: Bearer {{accessToken}}
+
+### Debug User Permissions - Multiple Permission Types
+GET {{baseUrl}}/admin/rbac/debug/perms?userId={{userId}}&needed=User:read,Role:manage,Permission:read,Booking:create,AuditLog:read
+Authorization: Bearer {{accessToken}}
+
+### Debug User Permissions - Wildcard Permissions
+GET {{baseUrl}}/admin/rbac/debug/perms?userId={{userId}}&needed=Property:manage,User:manage,*:read,manage:*
+Authorization: Bearer {{accessToken}}
+
+### Debug Non-existent User Permissions
+GET {{baseUrl}}/admin/rbac/debug/perms?userId=00000000-0000-0000-0000-000000000000
+Authorization: Bearer {{accessToken}}
+
+### ==========================================================================
+### ERROR SCENARIOS & VALIDATION
+### ==========================================================================
+
+### Add Role to User - Invalid User ID
+POST {{baseUrl}}/admin/rbac/add-role
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "userId": "invalid-user-id",
+  "roleId": "{{roleId}}"
+}
+
+### Add Role to User - Invalid Role ID
+POST {{baseUrl}}/admin/rbac/add-role
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "userId": "{{userId}}",
+  "roleId": "invalid-role-id"
+}
+
+### Add Permission to Role - Invalid Subject
+POST {{baseUrl}}/admin/rbac/role/add-permission
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "roleId": "{{roleId}}",
+  "subject": "InvalidSubject",
+  "action": "read"
+}
+
+### Add Permission to Role - Invalid Action
+POST {{baseUrl}}/admin/rbac/role/add-permission
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "roleId": "{{roleId}}",
+  "subject": "Property",
+  "action": "invalidAction"
+}
+
+### Grant ACL - Invalid Effect
+POST {{baseUrl}}/admin/rbac/grant-acl
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "userId": "{{userId}}",
+  "resourceType": "Property",
+  "resourceId": "{{propertyId}}",
+  "action": "read",
+  "effect": "INVALID_EFFECT"
+}
+
+### Grant ACL - Missing Required Fields
+POST {{baseUrl}}/admin/rbac/grant-acl
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "userId": "{{userId}}"
+}
+
+### ==========================================================================
+### UNAUTHORIZED ACCESS TESTING
+### ==========================================================================
+
+### Access RBAC without Authentication (401 Unauthorized)
+GET {{baseUrl}}/admin/rbac/user/{{userId}}/roles
+
+### Access RBAC with Invalid Token (401 Unauthorized)
+GET {{baseUrl}}/admin/rbac/user/{{userId}}/roles
+Authorization: Bearer invalid.jwt.token
+
+### Access RBAC with Expired Token (401 Unauthorized)
+GET {{baseUrl}}/admin/rbac/user/{{userId}}/roles
+Authorization: Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiYWRtaW4iOnRydWUsImV4cCI6MTYzMjQyMDAwMH0.expired
+
+### ==========================================================================
+### BULK OPERATIONS TESTING
+### ==========================================================================
+
+### Add Multiple Permissions to Role
+POST {{baseUrl}}/admin/rbac/role/add-permission
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "roleId": "{{roleId}}",
+  "subject": "Booking",
+  "action": "create"
+}
+
+###
+POST {{baseUrl}}/admin/rbac/role/add-permission
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "roleId": "{{roleId}}",
+  "subject": "Booking",
+  "action": "read"
+}
+
+###
+POST {{baseUrl}}/admin/rbac/role/add-permission
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "roleId": "{{roleId}}",
+  "subject": "Booking",
   "action": "update"
 }
 
-
-### =======================
-### BUSINESS ENDPOINTS — TEST QUYỀN
-### =======================
-
-### (User) Đọc property — cần Property:read (hoặc Property:manage / manage:*)
-GET {{base}}/properties/{{resourceId}}
-Authorization: Bearer {{userToken}}
-
-### (User) Sửa property — cần Property:update (hoặc Property:manage / manage:*)
-PATCH {{base}}/properties/{{resourceId}}
-Authorization: Bearer {{userToken}}
-Content-Type: {{json}}
+### Grant Multiple ACL Permissions
+POST {{baseUrl}}/admin/rbac/grant-acl
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
 
 {
-  "title": "New title"
+  "userId": "{{userId}}",
+  "resourceType": "Booking",
+  "resourceId": "booking-001",
+  "action": "read",
+  "effect": "ALLOW"
 }
 
+###
+POST {{baseUrl}}/admin/rbac/grant-acl
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
 
-### =======================
-### GỢI Ý DEBUG (TUỲ CHỌN)
-### =======================
-# Nếu bạn có endpoint debug để xem perms mở rộng của user
-# GET {{base}}/admin/rbac/debug/perms?userId={{userId}}
-# Authorization: Bearer {{adminToken}}
+{
+  "userId": "{{userId}}",
+  "resourceType": "Booking",
+  "resourceId": "booking-002",
+  "action": "update",
+  "effect": "ALLOW"
+}
+
+###
+POST {{baseUrl}}/admin/rbac/grant-acl
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "userId": "{{userId}}",
+  "resourceType": "Booking",
+  "resourceId": "booking-003",
+  "action": "delete",
+  "effect": "DENY"
+}
+
+### ==========================================================================
+### OWNERSHIP TESTING
+### ==========================================================================
+
+### Debug Self User Permissions (ownership rule)
+GET {{baseUrl}}/admin/rbac/debug/perms?userId={{userId}}&resourceType=User&resourceId={{userId}}&needed=User:update,User:read
+Authorization: Bearer {{accessToken}}
+
+### Debug Property Owner Permissions (ownership rule)
+GET {{baseUrl}}/admin/rbac/debug/perms?userId={{userId}}&resourceType=Property&resourceId={{propertyId}}&needed=Property:manage,Property:update,Property:delete
+Authorization: Bearer {{accessToken}}
+
+### ==========================================================================
+### EDGE CASES & STRESS TESTING
+### ==========================================================================
+
+### Empty Query Parameters
+GET {{baseUrl}}/admin/rbac/debug/perms?userId={{userId}}&needed=
+Authorization: Bearer {{accessToken}}
+
+### Very Long Permission List
+GET {{baseUrl}}/admin/rbac/debug/perms?userId={{userId}}&needed=Property:read,Property:create,Property:update,Property:delete,Property:manage,User:read,User:create,User:update,User:delete,User:manage,Role:read,Role:create,Role:update,Role:delete,Role:manage,Permission:read,Permission:create,Permission:update,Permission:delete,Permission:manage,Booking:read,Booking:create,Booking:update,Booking:delete,Booking:manage,AuditLog:read,AuditLog:create,AuditLog:update,AuditLog:delete,AuditLog:manage
+Authorization: Bearer {{accessToken}}
+
+### SQL Injection Attempts (should be handled safely)
+GET {{baseUrl}}/admin/rbac/debug/perms?userId={{userId}}&needed=Property:read'; DROP TABLE users; --
+Authorization: Bearer {{accessToken}}
+
+### XSS Attempt in Parameters
+GET {{baseUrl}}/admin/rbac/debug/perms?userId={{userId}}&needed=<script>alert('xss')</script>
+Authorization: Bearer {{accessToken}}
+
+### ==========================================================================
+### CONCURRENT REQUEST TESTING
+### ==========================================================================
+
+### Simulate Concurrent Role Assignments (run simultaneously)
+POST {{baseUrl}}/admin/rbac/add-role
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "userId": "{{userId}}",
+  "roleId": "{{roleId}}"
+}
+
+###
+POST {{baseUrl}}/admin/rbac/add-role
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "userId": "{{userId}}",
+  "roleId": "{{managerRoleId}}"
+}
+
+### Simulate Concurrent Permission Grants
+POST {{baseUrl}}/admin/rbac/role/add-permission
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "roleId": "{{roleId}}",
+  "subject": "Property",
+  "action": "read"
+}
+
+###
+POST {{baseUrl}}/admin/rbac/role/add-permission
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "roleId": "{{roleId}}",
+  "subject": "Property",
+  "action": "read"
+}
+
+### ==========================================================================
+### PERFORMANCE TESTING
+### ==========================================================================
+
+### Test Permission Check Performance
+GET {{baseUrl}}/admin/rbac/debug/perms?userId={{userId}}&needed=Property:read
+Authorization: Bearer {{accessToken}}
+
+### Test Complex Permission Check Performance
+GET {{baseUrl}}/admin/rbac/debug/perms?userId={{userId}}&scopeKey=GLOBAL&resourceType=Property&resourceId={{propertyId}}&needed=Property:read,Property:update,User:manage,Role:read,Permission:manage
+Authorization: Bearer {{accessToken}}
+
+### ==========================================================================
+### CLEANUP OPERATIONS
+### ==========================================================================
+
+### Remove All Test Roles from User
+POST {{baseUrl}}/admin/rbac/remove-role
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "userId": "{{userId}}",
+  "roleId": "{{roleId}}"
+}
+
+###
+POST {{baseUrl}}/admin/rbac/remove-role
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "userId": "{{userId}}",
+  "roleId": "{{adminRoleId}}"
+}
+
+###
+POST {{baseUrl}}/admin/rbac/remove-role
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "userId": "{{userId}}",
+  "roleId": "{{managerRoleId}}"
+}
+
+### Revoke All Test ACL Permissions
+POST {{baseUrl}}/admin/rbac/revoke-acl
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "userId": "{{userId}}",
+  "resourceType": "Property",
+  "resourceId": "{{propertyId}}",
+  "action": "read"
+}
+
+###
+POST {{baseUrl}}/admin/rbac/revoke-acl
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "userId": "{{userId}}",
+  "resourceType": "Property",
+  "resourceId": "{{propertyId}}",
+  "action": "update"
+}
+
+### Final Permission Check (should be empty or minimal)
+GET {{baseUrl}}/admin/rbac/debug/perms?userId={{userId}}
+Authorization: Bearer {{accessToken}}
+
+### ==========================================================================
+### NOTES FOR TESTING
+### ==========================================================================
+#
+# RBAC Testing Workflow:
+# 1. First run auth.http to get valid access token with admin permissions
+# 2. Update @accessToken, @userId, @roleId variables with real IDs
+# 3. Create test roles and permissions in your database first
+# 4. Run role assignment tests
+# 5. Test permission verification
+# 6. Test ACL (Access Control List) functionality
+# 7. Use debug endpoints to verify permission inheritance
+# 8. Test edge cases and error scenarios
+# 9. Clean up test data
+#
+# Important Notes:
+# - RBAC requires admin-level permissions to manage
+# - Cache invalidation happens automatically when roles/permissions change
+# - Ownership rules are applied automatically (user can manage their own record)
+# - ACL can override role-based permissions (DENY takes precedence)
+# - Debug endpoint shows expanded permissions after all rules applied
+#
+# Test Categories Covered:
+# ✅ User-Role assignment/removal
+# ✅ Role-Permission management
+# ✅ ACL (Access Control List) operations
+# ✅ Permission debugging and observability
+# ✅ Ownership rule testing
+# ✅ Error handling and validation
+# ✅ Security testing (unauthorized access)
+# ✅ Edge cases and malformed input
+# ✅ Performance testing
+# ✅ Concurrent request handling
+#
+### ==========================================================================

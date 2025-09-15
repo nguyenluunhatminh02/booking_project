@@ -14,7 +14,6 @@ import {
   StartTotpDto,
   VerifyTotpDto,
   DisableTotpDto,
-  GenerateBackupDto,
   ConsumeBackupDto,
   DisableWithRecoveryDto,
 } from './dto/mfa.dto';
@@ -71,10 +70,7 @@ export class MfaController {
 
   @Post('backup/generate')
   @HttpCode(HttpStatus.OK)
-  async generateBackupCodes(
-    @CurrentUser() user: { id: string },
-    @Body() dto: GenerateBackupDto,
-  ) {
+  async generateBackupCodes(@CurrentUser() user: { id: string }) {
     // truyền count nếu có, mặc định service đã lấy từ config
     return this.mfa.generateBackupCodes(user.id);
   }

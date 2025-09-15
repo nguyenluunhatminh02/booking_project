@@ -14,6 +14,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { AuditLogService } from '../audit/audit-log.service';
 import { DeviceApprovalService } from './device-approval.service';
 import { JwtAuthGuard } from './guards/jwt.guard';
+import { MailerModule } from '../mailer/mailer.module';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { JwtAuthGuard } from './guards/jwt.guard';
         audience: process.env.JWT_AUDIENCE || 'booking-fe',
       },
     }),
+    MailerModule,
   ],
   controllers: [AuthController],
   providers: [

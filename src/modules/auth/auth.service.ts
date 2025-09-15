@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -73,6 +74,15 @@ export class AuthService {
   private pendingKey = (sid: string, oldHash: string) =>
     `${NS}:rt:pending:${sid}:${oldHash}`;
 
+  private safeJson<T = any>(s?: string | null): T | undefined {
+    if (!s) return;
+    try {
+      return JSON.parse(s) as T;
+    } catch {
+      return;
+    }
+  }
+
   /** Singleflight lock theo (sid, oldHash) để tránh rotate trùng khi refresh đồng thời */
   private async withRtRotateSingleflight<T>(
     sid: string,
@@ -88,14 +98,23 @@ export class AuthService {
       nx: true,
       ttlSec: ttl,
     });
+
     if (!locked) {
-      // đã có thằng khác rotate: chờ pending map xuất hiện
-      await new Promise((r) => setTimeout(r, 50));
-      const raw1 = await this.redis.get(this.pendingKey(sid, oldHash));
-      if (raw1) return JSON.parse(raw1);
-      await new Promise((r) => setTimeout(r, 80));
-      const raw2 = await this.redis.get(this.pendingKey(sid, oldHash));
-      if (raw2) return JSON.parse(raw2);
+      // Đợi kết quả từ pending map bằng backoff lũy tiến đến hết TTL
+      const pendKey = this.pendingKey(sid, oldHash);
+      let wait = 40;
+      const deadline = Date.now() + ttl * 1000;
+      while (Date.now() < deadline) {
+        try {
+          const raw = await this.redis.get(pendKey);
+          const parsed = this.safeJson<T>(raw);
+          if (parsed) return parsed;
+        } catch {
+          // ignore and continue backoff
+        }
+        await new Promise((r) => setTimeout(r, wait));
+        wait = Math.min(wait * 2, 320);
+      }
       // fallthrough: chạy fn (rare)
     }
 
@@ -298,7 +317,7 @@ export class AuthService {
       });
     } catch (e) {
       if ((e as PrismaClientKnownRequestError)?.code === 'P2002') {
-        throw new BadRequestException('Email already exists');
+        throw new ConflictException('Email already exists');
       }
       throw e;
     }
@@ -410,14 +429,17 @@ export class AuthService {
     const { sessionId, tokenPart } = parts;
     const now = new Date();
 
-    // Redis fast-path
+    // Redis fast-path (soft negative): nếu thiếu key -> KHÔNG reject ngay
+    let redisAlive = true;
     if (this.redis.enabled) {
-      const alive = await this.redis.get(`${NS}:rt:${sessionId}`);
-      if (!alive)
-        throw new UnauthorizedException('Refresh session expired or revoked');
+      try {
+        redisAlive = (await this.redis.get(`${NS}:rt:${sessionId}`)) === '1';
+      } catch {
+        redisAlive = true; // coi như unknown
+      }
     }
 
-    // Load session + user
+    // Load session + user (DB là source of truth)
     const session = await this.prisma.userSession.findUnique({
       where: { id: sessionId },
       include: { user: { select: { id: true, email: true } } },
@@ -432,6 +454,25 @@ export class AuthService {
     }
     if (session.approved === false)
       throw new UnauthorizedException('Device approval required');
+
+    // Heal Redis key nếu DB sống mà Redis báo chết
+    if (this.redis.enabled && !redisAlive) {
+      const remainSec = Math.max(
+        1,
+        Math.ceil((session.expiresAt.getTime() - now.getTime()) / 1000),
+      );
+      await this.redis
+        .set(`${NS}:rt:${sessionId}`, '1', { ttlSec: remainSec })
+        .catch(() => {});
+    }
+
+    // Rate limit refresh per-session để tránh abuse
+    const rl = await this.tb.consume(`refresh:sid:${sessionId}`, {
+      capacity: 10,
+      refillTokens: 10,
+      refillIntervalMs: 60_000,
+    });
+    if (!rl.allowed) throw to429(rl);
 
     const suspicious =
       (ctx?.ua && session.userAgent && ctx.ua !== session.userAgent) ||
@@ -458,7 +499,6 @@ export class AuthService {
       await this.prisma.userSession
         .update({ where: { id: sessionId }, data: { lastUsedAt: now } })
         .catch(() => {});
-
       const expectedOld = session.refreshHash;
 
       const out = await this.withRtRotateSingleflight(
@@ -481,7 +521,11 @@ export class AuthService {
             const raw = await this.redis.get(
               this.pendingKey(sessionId, expectedOld),
             );
-            if (raw) return JSON.parse(raw);
+            const parsed = this.safeJson<{
+              refreshToken: string;
+              refreshExpiresAt: string;
+            }>(raw);
+            if (parsed) return parsed;
           }
           // Fallback nhẹ: coi như conflict
           throw new UnauthorizedException('Refresh conflict, try again');
@@ -501,7 +545,7 @@ export class AuthService {
       };
     }
 
-    // --- Case 2: inGrace (client gửi prev ngay từ đầu) ---
+    // --- Case 2: inGrace (client gửi prev trong cửa sổ grace) ---
     const inGrace =
       !!session.prevRefreshHash &&
       !!session.prevExpiresAt &&
@@ -514,8 +558,11 @@ export class AuthService {
         const raw = await this.redis.get(
           this.pendingKey(sessionId, session.prevRefreshHash!),
         );
-        if (raw) {
-          const parsed = JSON.parse(raw);
+        const parsed = this.safeJson<{
+          refreshToken: string;
+          refreshExpiresAt: string;
+        }>(raw);
+        if (parsed) {
           await this.prisma.userSession
             .update({
               where: { id: sessionId },
@@ -534,7 +581,7 @@ export class AuthService {
             accessToken,
             accessTokenExpiresIn: this.accessTtlSec,
             accessTokenExpSec: exp,
-            refreshToken: parsed.refreshToken as string,
+            refreshToken: parsed.refreshToken,
             refreshExpiresAt: new Date(parsed.refreshExpiresAt),
           };
         }
@@ -560,7 +607,11 @@ export class AuthService {
             const raw = await this.redis.get(
               this.pendingKey(sessionId, session.refreshHash),
             );
-            if (raw) return JSON.parse(raw);
+            const parsed = this.safeJson<{
+              refreshToken: string;
+              refreshExpiresAt: string;
+            }>(raw);
+            if (parsed) return parsed;
           }
           throw new UnauthorizedException('Refresh conflict, try again');
         },

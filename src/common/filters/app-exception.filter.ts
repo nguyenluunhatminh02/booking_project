@@ -1,6 +1,6 @@
 import { Catch, ExceptionFilter, ArgumentsHost } from '@nestjs/common';
 import { Response, Request } from 'express';
-import { AppException } from './app.exception';
+import { AppException } from '../errors/app.exception';
 import { randomUUID } from 'crypto';
 
 @Catch(AppException)
@@ -16,8 +16,14 @@ export class AppExceptionFilter implements ExceptionFilter {
     const problem = {
       ...exception.problem,
       instance: req.originalUrl,
+      status: exception.getStatus(),
       correlationId,
     };
+    if (exception.problem.headers) {
+      for (const [k, v] of Object.entries(exception.problem.headers)) {
+        res.setHeader(k, String(v));
+      }
+    }
 
     if (exception.problem.retryAfterSec) {
       res.setHeader('Retry-After', String(exception.problem.retryAfterSec));

@@ -1,89 +1,669 @@
+### ==========================================================================
+### BOOKING PROJECT - AUTHENTICATION API TEST SUITE
+### ==========================================================================
+### Base URL Configuration
 @baseUrl = http://localhost:3000
-@json = application/json
-@email = userdangcap@example.com
-@password = StrongPass123!
-@deviceId = chrome-123
-@email1 = userdangcap1@example.com
-@password1 = StrongPass123!
-@deviceId = chrome-123
+@contentType = application/json
 
-### ===== BODY MODE (refreshToken trong body) =====
+### Variables (update these as needed)
+@userEmail = kronosss2002@gmail.com
+@userPassword = SecurePass123!
+@deviceId = browser-desktop-chrome-001
+@deviceFp = fp_abc123def456
 
-### Register (BODY)
+### Authentication tokens (will be populated during tests)
+@accessToken = 
+@refreshToken = 
+@csrfToken = ViWZFxfT-h6b2vQVOS4t1tA_TfYsQ-fXTfpQ
+
+### ==========================================================================
+### HEALTH CHECKS
+### ==========================================================================
+
+### Health - Liveness Check
+GET {{baseUrl}}/health/live
+
+### Health - Readiness Check  
+GET {{baseUrl}}/health/ready
+
+### ==========================================================================
+### CSRF TOKEN SETUP
+### ==========================================================================
+
+### Get CSRF Token
+GET {{baseUrl}}/csrf/token
+
+### ==========================================================================
+### USER REGISTRATION FLOW
+### ==========================================================================
+
+### Register New User
 POST {{baseUrl}}/auth/register
-Content-Type: {{json}}
+Content-Type: {{contentType}}
+X-Device-FP: {{deviceFp}}
+X-CSRF-Token: {{csrfToken}}
+
 
 {
-  "email": "{{email1}}",
-  "password": "{{password1}}"
+  "email": "{{userEmail}}",
+  "password": "{{userPassword}}"
 }
 
-### Login (BODY) -> copy accessToken, refreshToken từ response
-POST {{baseUrl}}/auth/login
-Content-Type: {{json}}
+### Register - Email Already Exists (409 Conflict)
+POST {{baseUrl}}/auth/register
+Content-Type: {{contentType}}
+X-CSRF-Token: {{csrfToken}}
 
 {
-  "email": "{{email}}",
-  "password": "{{password}}",
+  "email": "{{userEmail}}",
+  "password": "{{userPassword}}"
+}
+
+### Register - Weak Password (400 Bad Request)
+POST {{baseUrl}}/auth/register
+X-CSRF-Token: {{csrfToken}}
+Content-Type: {{contentType}}
+
+{
+  "email": "new@example.com",
+  "password": "weak"
+}
+
+### Register - Invalid Email Format (400 Bad Request)
+POST {{baseUrl}}/auth/register
+X-CSRF-Token: {{csrfToken}}
+Content-Type: {{contentType}}
+
+{
+  "email": "invalid-email",
+  "password": "{{userPassword}}"
+}
+
+### ==========================================================================
+### LOGIN FLOW
+### ==========================================================================
+
+### Login - Success
+POST {{baseUrl}}/auth/login
+Content-Type: {{contentType}}
+X-CSRF-Token: {{csrfToken}}
+X-Device-FP: {{deviceFp}}
+
+{
+  "email": "{{userEmail}}",
+  "password": "{{userPassword}}",
   "deviceId": "{{deviceId}}"
 }
 
-### Refresh (BODY) -> dán refreshToken vào đây
-POST {{baseUrl}}/auth/refresh
-Content-Type: {{json}}
-
-{
-  "refreshToken": "PASTE_REFRESH_TOKEN_HERE"
-}
-
-### Logout (BODY) -> dán refreshToken đã dùng
-POST {{baseUrl}}/auth/logout
-Content-Type: {{json}}
-
-{
-  "refreshToken": "PASTE_REFRESH_TOKEN_HERE"
-}
-
-### ===== COOKIE MODE (refreshToken bằng HttpOnly cookie) =====
-# Bật cookie jar nếu dùng REST Client (rememberCookiesForSubsequentRequests: true)
-
-### Register (COOKIE)
-POST {{baseUrl}}/auth/register
-Content-Type: {{json}}
-
-{ "email": "user@example.com", "password": "User@123456" }
-
-
-### Login (COOKIE) -> server Set-Cookie: rt=...
+### Login - Invalid Credentials (401 Unauthorized)
 POST {{baseUrl}}/auth/login
-Content-Type: {{json}}
-User-Agent: MyBrowser/1.0
+X-CSRF-Token: {{csrfToken}}
+Content-Type: {{contentType}}
 
 {
-  "email": "{{email1}}",
-  "password": "{{password1}}",
-  "deviceId": "{{deviceId}}",
-  "deviceFp": "fp-A"
+  "email": "{{userEmail}}",
+  "password": "wrongpassword"
 }
 
-### Refresh (COOKIE) -> cookie jar sẽ tự gửi rt; nếu không, tự thêm header Cookie
+### Login - Non-existent User (401 Unauthorized)
+POST {{baseUrl}}/auth/login
+Content-Type: {{contentType}}
+X-CSRF-Token: {{csrfToken}}
+
+{
+  "email": "nonexistent@example.com",
+  "password": "{{userPassword}}"
+}
+
+### Login - Missing Fields (400 Bad Request)
+POST {{baseUrl}}/auth/login
+Content-Type: {{contentType}}
+X-CSRF-Token: {{csrfToken}}
+
+{
+  "email": "{{userEmail}}"
+}
+
+### Login - Different Device (should trigger device approval)
+POST {{baseUrl}}/auth/login
+Content-Type: {{contentType}}
+X-Device-FP: different_fp_123
+X-CSRF-Token: {{csrfToken}}
+
+
+{
+  "email": "{{userEmail}}",
+  "password": "{{userPassword}}",
+  "deviceId": "different-device-001"
+}
+
+### ==========================================================================
+### TOKEN REFRESH FLOW
+### ==========================================================================
+
+### Refresh Token - Success
 POST {{baseUrl}}/auth/refresh
-Content-Type: {{json}}
+X-CSRF-Token: {{csrfToken}}
+Content-Type: {{contentType}}
 
-{}
 
-### (Nếu KHÔNG bật cookie jar) Refresh thủ công với header Cookie:
+
+### Refresh Token - Malformed Token (401 Unauthorized)
+
 POST {{baseUrl}}/auth/refresh
-Content-Type: {{json}}
-Cookie: rt=PASTE_RT_COOKIE_VALUE
-User-Agent: MyBrowser/DIFF
+X-CSRF-Token: {{csrfToken}}
+Content-Type: {{contentType}}
+User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129 Safari/537.36
+Accept-Language: en-US,en;q=0.9
 
-{}
+### ==========================================================================
+### DEVICE APPROVAL FLOW
+### ==========================================================================
 
-### Logout (COOKIE) -> server clear cookie
+### Approve Device - Success (requires approval token from email/notification)
+POST {{baseUrl}}/auth/approve-device
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+X-CSRF-Token: {{csrfToken}}
+{
+  "token": "approval-token-from-email"
+}
+
+### Approve Device - Invalid Token (400 Bad Request)
+POST {{baseUrl}}/auth/approve-device
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "token": "invalid-approval-token"
+}
+
+### ==========================================================================
+### LOGOUT FLOWS
+### ==========================================================================
+
+### Logout - Single Session
 POST {{baseUrl}}/auth/logout
-Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdiI6MSwiaWF0IjoxNzU2NTc0MjA4LCJleHAiOjE3NTY1NzUxMDgsImF1ZCI6ImJvb2tpbmctZmUiLCJpc3MiOiJib29raW5nLWFwaSIsInN1YiI6Ijk5MjQxZTVjLTRjYTQtNDg0YS04MDAyLTU4ZTdlNjc5MTBkYyIsImp0aSI6IjI1ODEwNWIwLWRmNmYtNDMzNi1hNmNjLTA5ZTk0NTE1MGRlMiJ9.oToAWA_2YtPGXC40tpn1BcM7LKcwvRfqt2pLlrlEk9E
-Content-Type: {{json}}
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+Cookie: rt={{refreshToken}}
 
+### Logout - All Sessions (keep current)
+POST {{baseUrl}}/auth/logout-all
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "keepSessionId": "current-session-id-here"
+}
+
+### Logout - All Sessions (revoke all)
+POST {{baseUrl}}/auth/logout-all
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
 
 {}
+
+### Logout - Missing Refresh Token (still successful)
+POST {{baseUrl}}/auth/logout
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+### ==========================================================================
+### ACCESS TOKEN REVOCATION
+### ==========================================================================
+
+### Revoke Specific Access Token
+POST {{baseUrl}}/auth/revoke-access
+Content-Type: {{contentType}}
+
+{
+  "accessToken": "{{accessToken}}"
+}
+
+### Revoke Invalid Access Token (should handle gracefully)
+POST {{baseUrl}}/auth/revoke-access
+Content-Type: {{contentType}}
+
+{
+  "accessToken": "invalid.jwt.token.here"
+}
+
+### ==========================================================================
+### MFA (MULTI-FACTOR AUTHENTICATION) TESTING
+### ==========================================================================
+
+### Get MFA Status
+GET {{baseUrl}}/mfa/status
+Authorization: Bearer {{accessToken}}
+
+### Start TOTP Setup
+POST {{baseUrl}}/mfa/totp/start
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "issuer": "BookingApp",
+  "label": "{{userEmail}}"
+}
+
+### Enable TOTP (requires code from authenticator app)
+POST {{baseUrl}}/mfa/totp/enable
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "code": "123456"
+}
+
+### Verify TOTP Code
+POST {{baseUrl}}/mfa/totp/verify
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "code": "123456"
+}
+
+### Generate Backup Codes
+POST {{baseUrl}}/mfa/backup/generate
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "count": 10
+}
+
+### Consume Backup Code
+POST {{baseUrl}}/mfa/backup/consume
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "code": "BACKUP-CODE-HERE"
+}
+
+### Generate Recovery Key
+POST {{baseUrl}}/mfa/recovery/generate
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+### Disable MFA with TOTP
+POST {{baseUrl}}/mfa/totp/disable
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "code": "123456"
+}
+
+### Disable MFA with Backup Code
+POST {{baseUrl}}/mfa/totp/disable
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "backupCode": "BACKUP-CODE-HERE"
+}
+
+### Disable MFA with Recovery Key
+POST {{baseUrl}}/mfa/recovery/disable
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "recoveryKey": "recovery-key-hex-string"
+}
+
+### ==========================================================================
+### RBAC (ROLE-BASED ACCESS CONTROL) TESTING
+### ==========================================================================
+
+### Check User Permissions (Debug)
+GET {{baseUrl}}/admin/rbac/debug/perms?userId=user-id-here&needed=Property:read,User:update
+Authorization: Bearer {{accessToken}}
+
+### List User Roles
+GET {{baseUrl}}/admin/rbac/user/user-id-here/roles
+Authorization: Bearer {{accessToken}}
+
+### Add Role to User
+POST {{baseUrl}}/admin/rbac/add-role
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "userId": "user-id-here",
+  "roleId": "role-id-here"
+}
+
+### Remove Role from User
+POST {{baseUrl}}/admin/rbac/remove-role
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "userId": "user-id-here",
+  "roleId": "role-id-here"
+}
+
+### Grant ACL Permission
+POST {{baseUrl}}/admin/rbac/grant-acl
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "userId": "user-id-here",
+  "resourceType": "Property",
+  "resourceId": "property-123",
+  "action": "update",
+  "effect": "ALLOW"
+}
+
+### Revoke ACL Permission
+POST {{baseUrl}}/admin/rbac/revoke-acl
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "userId": "user-id-here",
+  "resourceType": "Property",
+  "resourceId": "property-123",
+  "action": "update"
+}
+
+### List User ACL
+GET {{baseUrl}}/admin/rbac/acl?userId=user-id-here&resourceType=property
+Authorization: Bearer {{accessToken}}
+
+### ==========================================================================
+### RATE LIMITING TESTS
+### ==========================================================================
+
+### Test Rate Limiting - Multiple Rapid Requests
+### (Run these in sequence to test rate limiting)
+
+POST {{baseUrl}}/auth/login
+Content-Type: {{contentType}}
+
+{
+  "email": "{{userEmail}}",
+  "password": "wrongpassword"
+}
+
+###
+POST {{baseUrl}}/auth/login
+Content-Type: {{contentType}}
+
+{
+  "email": "{{userEmail}}",
+  "password": "wrongpassword"
+}
+
+###
+POST {{baseUrl}}/auth/login
+Content-Type: {{contentType}}
+
+{
+  "email": "{{userEmail}}",
+  "password": "wrongpassword"
+}
+
+###
+POST {{baseUrl}}/auth/login
+Content-Type: {{contentType}}
+
+{
+  "email": "{{userEmail}}",
+  "password": "wrongpassword"
+}
+
+###
+POST {{baseUrl}}/auth/login
+Content-Type: {{contentType}}
+
+{
+  "email": "{{userEmail}}",
+  "password": "wrongpassword"
+}
+
+### This should trigger rate limiting (429 Too Many Requests)
+POST {{baseUrl}}/auth/login
+Content-Type: {{contentType}}
+
+{
+  "email": "{{userEmail}}",
+  "password": "wrongpassword"
+}
+
+### ==========================================================================
+### SECURITY TESTING
+### ==========================================================================
+
+### XSS Protection Test
+POST {{baseUrl}}/auth/login
+Content-Type: {{contentType}}
+
+{
+  "email": "<script>alert('xss')</script>@example.com",
+  "password": "{{userPassword}}"
+}
+
+### SQL Injection Test (should be handled by Prisma)
+POST {{baseUrl}}/auth/login
+Content-Type: {{contentType}}
+
+{
+  "email": "admin@example.com' OR '1'='1",
+  "password": "anything"
+}
+
+### Large Payload Test (should trigger payload size limit)
+POST {{baseUrl}}/auth/login
+Content-Type: {{contentType}}
+
+{
+  "email": "{{userEmail}}",
+  "password": "{{userPassword}}",
+  "largeField": "{{$randomLoremParagraphs 1000}}"
+}
+
+### ==========================================================================
+### CSRF PROTECTION TESTING
+### ==========================================================================
+
+### Test CSRF Protection - Missing Token (should fail with 403)
+POST {{baseUrl}}/auth/login
+Content-Type: {{contentType}}
+
+{
+  "email": "{{userEmail}}",
+  "password": "{{userPassword}}"
+}
+
+### Test CSRF Protection - With Valid Token
+POST {{baseUrl}}/auth/login
+Content-Type: {{contentType}}
+X-CSRF-Token: {{csrfToken}}
+
+{
+  "email": "{{userEmail}}",
+  "password": "{{userPassword}}"
+}
+
+### ==========================================================================
+### CONCURRENT REFRESH TOKEN TESTING
+### ==========================================================================
+
+### Simulate Concurrent Refresh (Race Condition Test)
+### Run these simultaneously to test refresh token rotation safety
+
+POST {{baseUrl}}/auth/refresh
+Content-Type: {{contentType}}
+Cookie: rt={{refreshToken}}
+
+###
+POST {{baseUrl}}/auth/refresh
+Content-Type: {{contentType}}
+Cookie: rt={{refreshToken}}
+
+### ==========================================================================
+### TOKEN REUSE DETECTION
+### ==========================================================================
+
+### Use Old Refresh Token (should trigger security event)
+POST {{baseUrl}}/auth/refresh
+Content-Type: {{contentType}}
+Cookie: rt=old-refresh-token-here
+
+### ==========================================================================
+### EDGE CASES & ERROR HANDLING
+### ==========================================================================
+
+### Empty Request Body
+POST {{baseUrl}}/auth/login
+Content-Type: {{contentType}}
+
+{}
+
+### Null Values
+POST {{baseUrl}}/auth/login
+Content-Type: {{contentType}}
+
+{
+  "email": null,
+  "password": null
+}
+
+### Wrong Content Type
+POST {{baseUrl}}/auth/login
+Content-Type: text/plain
+
+email=test@example.com&password=password123
+
+### Very Long Email (should be handled gracefully)
+POST {{baseUrl}}/auth/register
+Content-Type: {{contentType}}
+
+{
+  "email": "verylongemailaddressthatexceedstypicallimitsforthisfieldandmaytrytocauseissues@verylongdomainnamethatalsotriestocauseissues.com",
+  "password": "{{userPassword}}"
+}
+
+### Unicode/Special Characters
+POST {{baseUrl}}/auth/register
+Content-Type: {{contentType}}
+
+{
+  "email": "test+unicode@测试.com",
+  "password": "P@ssw0rd123!测试"
+}
+
+### ==========================================================================
+### STRESS TESTING SCENARIOS
+### ==========================================================================
+
+### Multiple Failed Login Attempts (Account Locking)
+### Run these in sequence to test account locking mechanism
+
+POST {{baseUrl}}/auth/login
+Content-Type: {{contentType}}
+
+{
+  "email": "{{userEmail}}",
+  "password": "wrong1"
+}
+
+###
+POST {{baseUrl}}/auth/login
+Content-Type: {{contentType}}
+
+{
+  "email": "{{userEmail}}",
+  "password": "wrong2"
+}
+
+###
+POST {{baseUrl}}/auth/login
+Content-Type: {{contentType}}
+
+{
+  "email": "{{userEmail}}",
+  "password": "wrong3"
+}
+
+###
+POST {{baseUrl}}/auth/login
+Content-Type: {{contentType}}
+
+{
+  "email": "{{userEmail}}",
+  "password": "wrong4"
+}
+
+###
+POST {{baseUrl}}/auth/login
+Content-Type: {{contentType}}
+
+{
+  "email": "{{userEmail}}",
+  "password": "wrong5"
+}
+
+### This should trigger account lock
+POST {{baseUrl}}/auth/login
+Content-Type: {{contentType}}
+
+{
+  "email": "{{userEmail}}",
+  "password": "wrong6"
+}
+
+### Try correct password after lock (should still fail)
+POST {{baseUrl}}/auth/login
+Content-Type: {{contentType}}
+
+{
+  "email": "{{userEmail}}",
+  "password": "{{userPassword}}"
+}
+
+### ==========================================================================
+### CLEANUP & RESET
+### ==========================================================================
+
+### Final Logout (cleanup)
+POST {{baseUrl}}/auth/logout-all
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{}
+
+### ==========================================================================
+### NOTES FOR TESTING
+### ==========================================================================
+# 
+# 1. Update the @baseUrl variable to match your server
+# 2. Replace placeholder values (user-id-here, role-id-here, etc.) with real IDs
+# 3. For MFA testing, you'll need a real TOTP app (Google Authenticator, Authy)
+# 4. Some tests require running in sequence (like rate limiting tests)
+# 5. Monitor server logs for security events and audit trails
+# 6. Check Redis/database state for token management verification
+# 7. Test with different User-Agent strings to verify device detection
+# 8. Use network debugging tools to verify security headers
+# 
+# Test Categories Covered:
+# ✅ Registration & Login flows
+# ✅ Token refresh & rotation
+# ✅ Device approval workflows  
+# ✅ MFA/2FA complete flows
+# ✅ RBAC permissions testing
+# ✅ Rate limiting & security
+# ✅ Error handling & edge cases
+# ✅ CSRF protection
+# ✅ XSS & injection protection
+# ✅ Concurrent request handling
+# ✅ Token reuse detection
+# ✅ Account locking mechanisms
+# 
+### ==========================================================================

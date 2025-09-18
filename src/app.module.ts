@@ -19,6 +19,7 @@ import { HealthController } from './modules/health/health.controller';
 import { DeviceFingerprintMiddleware } from './common/middlewares/finger-print.middleware';
 import { DeviceFingerprintService } from './common/finger-print.service';
 import { MailerModule } from './modules/mailer/mailer.module';
+import { PropertyModule } from './modules/property/property.module';
 
 @Module({
   imports: [
@@ -29,6 +30,7 @@ import { MailerModule } from './modules/mailer/mailer.module';
     LoggerModule,
     MfaModule,
     MailerModule,
+    PropertyModule,
   ],
   controllers: [AppController, CsrfController, HealthController],
   providers: [

@@ -131,9 +131,9 @@ export class RbacService {
     if (type === 'property') {
       const p = await this.prisma.property.findUnique({
         where: { id: resource.resourceId },
-        select: { ownerId: true },
+        select: { hostId: true },
       });
-      if (p?.ownerId === userId) {
+      if (p?.hostId === userId) {
         owned.add('property:manage');
       }
     }

@@ -1,0 +1,82 @@
+@host = http://localhost:3000
+@token = PUT_YOUR_BEARER_TOKEN_HERE
+@propertyId = prop_demo_1
+
+# Dùng UUID ngẫu nhiên cho mỗi request "ghi"
+@idemKey1 = 6e93c2a3-4d0f-4a29-9d9a-9f1e9aee1b3c
+@idemKey2 = 11111111-2222-3333-4444-555555555555
+
+###
+# 1) HOLD lần 1 — tạo giữ chỗ (trả HOLD hoặc REVIEW tùy fraud)
+POST {{host}}/bookings/hold
+Authorization: Bearer {{token}}
+Content-Type: application/json
+Idempotency-Key: {{idemKey1}}
+
+{
+  "propertyId": "{{propertyId}}",
+  "checkIn":  "2025-10-10",
+  "checkOut": "2025-10-12"
+}
+
+###
+# 2) HOLD retry — cùng key & payload → trả snapshot lần 1
+POST {{host}}/bookings/hold
+Authorization: Bearer {{token}}
+Content-Type: application/json
+Idempotency-Key: {{idemKey1}}
+
+{
+  "propertyId": "{{propertyId}}",
+  "checkIn":  "2025-10-10",
+  "checkOut": "2025-10-12"
+}
+
+###
+# 3) HOLD reuse key nhưng payload KHÁC → 422 (bị chặn)
+POST {{host}}/bookings/hold
+Authorization: Bearer {{token}}
+Content-Type: application/json
+Idempotency-Key: {{idemKey1}}
+
+{
+  "propertyId": "{{propertyId}}",
+  "checkIn":  "2025-10-11",
+  "checkOut": "2025-10-13"
+}
+
+###
+# 4) HOLD khác với key MỚI → tạo booking khác (nếu còn tồn)
+POST {{host}}/bookings/hold
+Authorization: Bearer {{token}}
+Content-Type: application/json
+Idempotency-Key: {{idemKey2}}
+
+{
+  "propertyId": "{{propertyId}}",
+  "checkIn":  "2025-10-15",
+  "checkOut": "2025-10-17"
+}
+
+###
+# 5) HOLD thiếu Idempotency-Key → 400
+POST {{host}}/bookings/hold
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "propertyId": "{{propertyId}}",
+  "checkIn":  "2025-10-20",
+  "checkOut": "2025-10-22"
+}
+
+###
+# 6) CANCEL HOLD — hủy booking (điền id từ (1) hoặc (4))
+@bookingId = PUT_BOOKING_ID_HERE
+POST {{host}}/bookings/{{bookingId}}/cancel
+Authorization: Bearer {{token}}
+
+###
+# 7) ADMIN: expire các HOLD/REVIEW quá hạn (nếu bạn mở endpoint này)
+POST {{host}}/admin/bookings/expire
+Authorization: Bearer {{token}}

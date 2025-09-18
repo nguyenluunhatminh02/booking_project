@@ -1,0 +1,28 @@
+@host = http://localhost:3000
+
+###
+# Upsert flag 'fraud_check' bật 50% với salt v1
+PUT {{host}}/feature-flags/fraud_check
+Content-Type: application/json
+
+{
+  "enabled": true,
+  "payload": {
+    "rollout": 50,
+    "salt": "fraud_v1",
+    "allowUsers": ["user_admin_demo"],
+    "denyUsers": []
+  }
+}
+
+###
+# Xem raw flag
+GET {{host}}/feature-flags/fraud_check
+
+###
+# Kiểm tra theo user (rollout %)
+GET {{host}}/feature-flags/fraud_check/enabled?userId=user_customer_demo
+
+###
+# Kiểm tra bật tổng (không user)
+GET {{host}}/feature-flags/fraud_check/enabled

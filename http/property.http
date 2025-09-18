@@ -1,0 +1,83 @@
+@host = http://localhost:3000
+# JWT của user host; nếu dùng seed: email host@demo.local / Password123!
+@token = PUT_YOUR_BEARER_TOKEN_HERE
+# ID property demo do seed tạo:
+@propertyId = prop_demo_1
+
+###
+# 1) Tạo property (host)
+POST {{host}}/properties
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "title": "Cozy Studio • Dist 1",
+  "address": "123 Le Loi, D1, HCMC",
+  "description": "Near Ben Thanh Market",
+  "lat": 10.7758,
+  "lng": 106.7004,
+  "amenities": { "wifi": true, "ac": true }
+}
+
+###
+# 2) List property của tôi (phân trang)
+GET {{host}}/properties?skip=0&take=10
+Authorization: Bearer {{token}}
+
+###
+# 3) Lấy chi tiết 1 property
+GET {{host}}/properties/{{propertyId}}
+Authorization: Bearer {{token}}
+
+###
+# 4) Cập nhật property
+PATCH {{host}}/properties/{{propertyId}}
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "description": "Updated: very close to Opera House"
+}
+
+###
+# 5) Upsert lịch (TẠO MỚI -> BẮT BUỘC price; block => remaining = 0)
+POST {{host}}/properties/{{propertyId}}/calendar
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "items": [
+    { "date": "2025-10-01", "price": 1200000, "remaining": 3 },
+    { "date": "2025-10-02", "price": 1300000, "isBlocked": true }
+  ]
+}
+
+###
+# 6) Upsert lịch (CẬP NHẬT -> chỉ thay trường được gửi)
+POST {{host}}/properties/{{propertyId}}/calendar
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "items": [
+    { "date": "2025-10-01", "price": 1400000 },
+    { "date": "2025-10-02", "isBlocked": false, "remaining": 4 }
+  ]
+}
+
+###
+# 7) Lấy lịch (mặc định 60 ngày nếu không truyền; ở đây truyền 1 tháng)
+GET {{host}}/properties/{{propertyId}}/calendar?from=2025-10-01&to=2025-10-31
+Authorization: Bearer {{token}}
+
+###
+# 8) Case lỗi: tạo mới mà thiếu price -> 400
+POST {{host}}/properties/{{propertyId}}/calendar
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "items": [
+    { "date": "2025-11-01", "remaining": 3 }
+  ]
+}

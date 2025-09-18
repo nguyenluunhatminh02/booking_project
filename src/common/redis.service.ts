@@ -1,24 +1,40 @@
-import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
-import Redis, { Redis as RedisClient } from 'ioredis';
+import {
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
+import Redis, { Redis as RedisClient, RedisOptions } from 'ioredis';
 
-type SetOpts = {
-  ttlSec?: number; // EX seconds
-  nx?: boolean; // only-if-not-exists
-  xx?: boolean; // only-if-exists
-};
+type SetOpts = { ttlSec?: number; nx?: boolean; xx?: boolean };
 
 @Injectable()
-export class RedisService implements OnModuleDestroy {
+export class RedisService implements OnModuleInit, OnModuleDestroy {
   private redis?: RedisClient;
   private log = new Logger('Redis');
 
+  // Lua: unlock chỉ khi value == token (tránh unlock nhầm)
+  private readonly UNLOCK_LUA = `
+    if redis.call("GET", KEYS[1]) == ARGV[1] then
+      return redis.call("DEL", KEYS[1])
+    else
+      return 0
+    end
+  `;
+  private unlockSha?: string;
+
   constructor() {
     const url = process.env.REDIS_URL;
-    const commonOpts = {
-      maxRetriesPerRequest: null as any, // tránh “Queue full” với long ops
-      // retryStrategy: (times: number) => Math.min(1000 * times, 15000),
-      // enableReadyCheck: true, // mặc định true
-      // lazyConnect: false,
+    const keyPrefix =
+      process.env.REDIS_PREFIX || `${process.env.NODE_ENV || 'dev'}:`; // <-- prefix theo env
+
+    const commonOpts: RedisOptions = {
+      keyPrefix, // <-- prefix hoá toàn bộ keys
+      maxRetriesPerRequest: null as any, // ioredis: disable limit để tránh “Queue full”
+      retryStrategy: (times) => Math.min(1000 * times, 10_000), // backoff mượt 1s..10s
+      enableReadyCheck: true,
+      // lazyConnect: true,            // nếu muốn chủ động this.redis.connect() ở onModuleInit
+      // tls: {},                      // nếu dùng rediss://
     };
 
     try {
@@ -27,8 +43,7 @@ export class RedisService implements OnModuleDestroy {
         : new Redis({
             host: process.env.REDIS_HOST || 'localhost',
             port: +(process.env.REDIS_PORT || 6379),
-            // password: process.env.REDIS_PASSWORD, // nếu có
-            // tls: {}, // nếu dùng TLS
+            // password: process.env.REDIS_PASSWORD,
             ...commonOpts,
           });
 
@@ -44,6 +59,28 @@ export class RedisService implements OnModuleDestroy {
     }
   }
 
+  async onModuleInit() {
+    // Nếu dùng lazyConnect, gọi connect() ở đây
+    if (this.redis && this.redis.status === 'wait') {
+      await this.redis.connect().catch(() => undefined);
+    }
+    // Preload Lua script (tùy chọn, sẽ tự eval nếu chưa load)
+    try {
+      if (this.redis)
+        this.unlockSha = (await this.redis.script(
+          'LOAD',
+          this.UNLOCK_LUA,
+        )) as string;
+    } catch {
+      /* empty */
+    }
+  }
+
+  getClient() {
+    if (!this.redis) throw new Error('Redis client is not initialized');
+    return this.redis;
+  }
+
   get enabled() {
     return this.redis?.status === 'ready';
   }
@@ -56,24 +93,15 @@ export class RedisService implements OnModuleDestroy {
     }
   }
 
-  // ---------------- Core ----------------
+  // -------- Core KV --------
   async set(key: string, value: string, opts: SetOpts = {}) {
     if (!this.redis) return null;
-
     const args: (string | number)[] = [key, value];
-
-    if (opts.ttlSec && opts.ttlSec > 0) {
-      args.push('EX', opts.ttlSec);
-    }
-    if (opts.nx && opts.xx) {
-      throw new Error('NX and XX are mutually exclusive');
-    }
+    if (opts.ttlSec && opts.ttlSec > 0) args.push('EX', opts.ttlSec);
+    if (opts.nx && opts.xx) throw new Error('NX and XX are mutually exclusive');
     if (opts.nx) args.push('NX');
     if (opts.xx) args.push('XX');
-
-    // Trả về 'OK' hoặc null nếu NX/XX không thỏa
-    // eslint-disable-next-line prefer-spread
-    return await this.redis.set.apply(this.redis, args as any);
+    return this.redis.set(...(args as [string, string, ...any[]])); // 'OK' | null
   }
 
   async get(key: string) {
@@ -97,7 +125,7 @@ export class RedisService implements OnModuleDestroy {
   }
 
   async ttl(key: string) {
-    if (!this.redis) return -2; // -2 = not exist | theo Redis conv.
+    if (!this.redis) return -2; // -2 = not exist
     return this.redis.ttl(key);
   }
 
@@ -107,7 +135,7 @@ export class RedisService implements OnModuleDestroy {
     return this.redis.mget(...keys);
   }
 
-  // ---------------- Sugar helpers ----------------
+  // -------- Sugar helpers --------
   async setNx(key: string, value: string, ttlSec?: number) {
     return this.set(key, value, { ttlSec, nx: true });
   }
@@ -116,7 +144,77 @@ export class RedisService implements OnModuleDestroy {
     return this.set(key, value, { ttlSec });
   }
 
-  // TOKEN BUCKET
+  // JSON helpers
+  async setJSON<T>(key: string, obj: T, ttlSec?: number) {
+    return this.set(key, JSON.stringify(obj), { ttlSec });
+  }
+  async getJSON<T = unknown>(key: string): Promise<T | null> {
+    const s = await this.get(key);
+    if (!s) return null;
+    try {
+      return JSON.parse(s) as T;
+    } catch {
+      return null;
+    }
+  }
+
+  // Health
+  async ping(): Promise<boolean> {
+    if (!this.redis) return false;
+    try {
+      const r = await this.redis.ping();
+      return r === 'PONG';
+    } catch {
+      return false;
+    }
+  }
+
+  // -------- Lightweight lock (SET NX EX) --------
+  /**
+   * acquireLock: giữ khoá theo token (string tuỳ bạn sinh). Trả true nếu giữ được.
+   * Ví dụ: await acquireLock('job:expire', token, 30)
+   */
+  async acquireLock(
+    key: string,
+    token: string,
+    ttlSec: number,
+  ): Promise<boolean> {
+    const ok = await this.set(key, token, { ttlSec, nx: true });
+    return ok === 'OK';
+  }
+
+  /**
+   * releaseLock: chỉ nhả khoá nếu token khớp (an toàn khi hết hạn/renew).
+   */
+  async releaseLock(key: string, token: string): Promise<boolean> {
+    if (!this.redis) return false;
+    try {
+      const sha =
+        this.unlockSha ?? (await this.redis.script('LOAD', this.UNLOCK_LUA));
+      const res = (await this.redis.evalsha(
+        sha as string,
+        1,
+        key,
+        token,
+      )) as number;
+      return res === 1;
+    } catch {
+      // Fallback eval trực tiếp nếu script chưa load
+      try {
+        const res = (await this.redis.eval(
+          this.UNLOCK_LUA,
+          1,
+          key,
+          token,
+        )) as number;
+        return res === 1;
+      } catch {
+        return false;
+      }
+    }
+  }
+
+  // Token bucket (bạn đã có scriptLoad/evalsha; giữ nguyên)
   async scriptLoad(script: string) {
     if (!this.redis) return null;
     return this.redis.script('LOAD', script);

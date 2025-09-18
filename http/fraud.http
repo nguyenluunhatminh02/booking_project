@@ -1,0 +1,40 @@
+@host = http://localhost:3000
+@token = PUT_YOUR_ADMIN_JWT_HERE
+@bookingId = PUT_BOOKING_ID_HERE
+
+###
+# List các case chờ duyệt
+GET {{host}}/admin/fraud/cases?decision=PENDING&skip=0&take=20
+Authorization: Bearer {{token}}
+
+###
+# Xem 1 case theo bookingId
+GET {{host}}/admin/fraud/cases/{{bookingId}}
+Authorization: Bearer {{token}}
+
+###
+# Quyết định: APPROVED -> booking REVIEW -> HOLD
+POST {{host}}/admin/fraud/cases/{{bookingId}}/decision
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "decision": "APPROVED",
+  "note": "looks okay; trusted user"
+}
+
+###
+# Quyết định: REJECTED -> booking REVIEW -> CANCELLED + trả kho
+POST {{host}}/admin/fraud/cases/{{bookingId}}/decision
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "decision": "REJECTED",
+  "note": "suspicious patterns"
+}
+
+###
+# Debug assess (không ghi DB)
+GET {{host}}/admin/fraud/assess?userId=user_customer_demo&amount=12000000
+Authorization: Bearer {{token}}

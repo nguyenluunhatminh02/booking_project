@@ -1,21 +1,42 @@
 // ===========================
-// Generators / Datasource
+// Prisma Schema - Booking App
 // ===========================
+
+// ---------- Generators / Datasource ----------
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
   previewFeatures = ["postgresqlExtensions"]
+  shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
-  extensions = []
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  // Bật citext để dùng @db.Citext cho email/promo code…
+  extensions = [citext(map: "citext")]
 }
 
 // ---------- Enums ----------
 enum ACLEffect { 
   ALLOW 
   DENY 
+}
+
+enum PromotionType { 
+  PERCENT 
+  FIXED 
+}
+
+enum RiskLevel { 
+  LOW 
+  MEDIUM 
+  HIGH 
+}
+
+enum FraudDecision { 
+  PENDING 
+  APPROVED 
+  REJECTED 
 }
 
 enum SessionRevokeReason { 
@@ -33,15 +54,57 @@ enum SecurityEventType {
   REFRESH_REUSE 
 }
 
-enum BookingStatus { 
-  PENDING 
-  CONFIRMED 
-  CANCELED 
-}
 enum UserTokenType { 
   EMAIL_VERIFY 
   PASSWORD_RESET 
   DEVICE_APPROVAL 
+}
+
+enum PaymentStatus { 
+  PENDING 
+  SUCCEEDED 
+  FAILED 
+  REFUNDED 
+}
+
+enum BookingStatus { 
+  HOLD 
+  PAID 
+  CANCELLED 
+  REFUNDED 
+  REVIEW 
+}
+
+/// Lịch sử sử dụng promotion (giúp chống race & hoàn trả)
+enum RedemptionStatus {
+  RESERVED   // khi HOLD/đặt chỗ, chưa thanh toán
+  APPLIED    // khi đã PAID
+  RELEASED   // bị huỷ/expire/refund
+}
+
+enum IdemStatus {
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+}
+
+model Idempotency {
+  id           String     @id @default(uuid())
+  userId       String?
+  endpoint     String      // ví dụ: "POST /bookings/hold"
+  key          String      // từ header: Idempotency-Key
+  requestHash  String      // sha256(payload quan trọng)
+  status       IdemStatus  @default(IN_PROGRESS)
+  resourceId   String?     // bookingId / paymentId...
+  response     Json?
+  error        Json?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  expiresAt    DateTime
+
+  @@unique([userId, endpoint, key]) // scope theo user + endpoint + key
+  @@index([endpoint, createdAt])
+  @@index([expiresAt])
 }
 
 // ---------- Core: Users & Sessions ----------
@@ -49,7 +112,7 @@ model User {
   id            String   @id @default(uuid())
   email         String   @unique @db.Citext
   password      String
-  accessVersion Int      @default(1)     // bump ⇒ invalidate all access tokens
+  accessVersion Int      @default(1)           // bump ⇒ invalidate all access tokens
   lockedUntil   DateTime?
 
   createdAt     DateTime @default(now())
@@ -60,14 +123,18 @@ model User {
   roles           UserRole[]
   securityEvents  SecurityEvent[]
   auditLogs       AuditLog[]
-  properties      Property[]   @relation("PropertyOwner")
-  bookings        Booking[]
+  properties      Property[]   @relation("HostProperties")     // host → properties
+  bookings        Booking[]    @relation("CustomerBookings")   // customer → bookings
   tokens          UserToken[]
 
+  // others
+  ResourceACL     ResourceACL[]
+  UserMfa         UserMfa[]
+  BackupCode      BackupCode[]
+  FraudAssessment FraudAssessment[]
+  Review          Review[]
+
   @@map("users")
-  ResourceACL ResourceACL[]
-  UserMfa UserMfa[]
-  BackupCode BackupCode[]
 }
 
 model UserSession {
@@ -76,16 +143,16 @@ model UserSession {
   deviceId        String?
   refreshHash     String
   tokenVersion    Int      @default(0)
-  accessSv     Int      @default(1)
+  accessSv   Int      @default(1)     // mirror từ User.accessVersion nếu cần
   expiresAt       DateTime
   revokedAt       DateTime?
   revokedReason   SessionRevokeReason?
 
   // observability / forensics
-  ip              String?  // prefer @db.Inet if supported by your Prisma
+  ip              String?  @db.Inet
   userAgent       String?
 
-  deviceFp        String?   // fingerprint từ FE (tuỳ bạn)
+  deviceFp        String?
   approved        Boolean   @default(true) // false => cần device approval flow
 
   lastUsedAt      DateTime?
@@ -97,6 +164,7 @@ model UserSession {
   prevExpiresAt   DateTime?
 
   createdAt       DateTime @default(now())
+
   user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   securityEvents  SecurityEvent[]
 
@@ -106,7 +174,7 @@ model UserSession {
   @@map("user_sessions")
 }
 
-// ---------- RBAC (single-tenant, no scope) ----------
+// ---------- RBAC ----------
 model Role {
   id        String   @id @default(uuid())
   name      String   @unique
@@ -159,7 +227,7 @@ model UserRole {
   @@map("user_roles")
 }
 
-// ---------- Instance-level ACL (tuỳ chọn cho ngoại lệ) ----------
+// ---------- Instance-level ACL ----------
 model ResourceACL {
   id           String    @id @default(uuid())
   userId       String
@@ -182,9 +250,9 @@ model SecurityEvent {
   userId    String?                             // nullable cho LOGIN_FAILED chưa định danh
   sessionId String?
   type      SecurityEventType
-  ip        String?
+  ip        String?  @db.Inet
   userAgent String?
-  deviceFp    String?   // Changed from deviceFingerprint
+  deviceFp  String?
   meta      Json?
   createdAt DateTime          @default(now())
 
@@ -212,41 +280,226 @@ model AuditLog {
   @@map("audit_logs")
 }
 
+// ---------- Feature Flags ----------
+model FeatureFlag {
+  key       String   @id
+  enabled   Boolean  @default(false)
+  payload   Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
 // ---------- Domain ----------
 model Property {
   id          String    @id @default(uuid())
+  hostId      String
   title       String
+  address     String
   description String?
-  ownerId     String
+
+  // Geo (DB lưu toạ độ; search dùng Typesense)
+  lat         Float?    @db.DoublePrecision
+  lng         Float?    @db.DoublePrecision
+
+  // Amenities JSONB
+  amenities   Json?     @default(dbgenerated("'{}'::jsonb"))
 
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
-  owner     User      @relation("PropertyOwner", fields: [ownerId], references: [id], onDelete: Cascade)
-  bookings  Booking[]
+  // Relations
+  host        User      @relation("HostProperties", fields: [hostId], references: [id], onDelete: Cascade)
+  availability AvailabilityDay[]
+  bookings    Booking[]
+  photos      Photo[]
+  reviews     Review[]
 
-  @@index([ownerId])
-  @@map("properties")
+  @@index([hostId])
+}
+
+model AvailabilityDay {
+  id          String    @id @default(uuid())
+  propertyId  String
+  date        DateTime  // ngày (UTC 00:00)
+  price       Int
+  remaining   Int
+  isBlocked   Boolean   @default(false)
+
+  property    Property  @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  @@unique([propertyId, date])
+  @@index([propertyId, date])
 }
 
 model Booking {
-  id          String        @id @default(uuid())
-  propertyId  String
-  userId      String
-  status      BookingStatus @default(PENDING)
+  id                String        @id @default(uuid())
+  propertyId        String
+  customerId        String
+  checkIn           DateTime
+  checkOut          DateTime
+  status            BookingStatus @default(HOLD)
+  totalPrice        Int
+  promoCode         String?       @db.Citext
+  holdExpiresAt     DateTime?
 
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+  discountAmount    Int           @default(0)   // final = totalPrice - discountAmount
 
-  property Property @relation(fields: [propertyId], references: [id], onDelete: Restrict)
-  user     User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+  // Promotion áp dụng (snapshot liên kết)
+  appliedPromotionId String?
+  appliedPromotion   Promotion?   @relation(fields: [appliedPromotionId], references: [id])
+
+  // (Tuỳ chọn) Chính sách huỷ/hoàn
+  cancelPolicyId      String?
+  cancelPolicy        CancelPolicy? @relation(fields: [cancelPolicyId], references: [id])
+  cancelPolicySnapshot Json?        // snapshot rules để tính hoàn tiền về sau
+
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  property          Property      @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  customer          User          @relation("CustomerBookings", fields: [customerId], references: [id], onDelete: Restrict)
+  payment           Payment?
+
+  FraudAssessment      FraudAssessment[]
+  PromotionRedemption  PromotionRedemption[]
 
   @@index([propertyId])
-  @@index([userId])
-  @@map("bookings")
+  @@index([customerId])
+  @@index([checkIn, checkOut])
+  @@index([propertyId, status])
+  @@index([status, holdExpiresAt])     // phục vụ saga expire
+
+
 }
 
-// ---------- One-time Tokens ----------
+model FraudAssessment {
+  id         String        @id @default(uuid())
+  bookingId  String        @unique
+  userId     String
+  score      Int
+  level      RiskLevel
+  decision   FraudDecision @default(PENDING)
+  reasons    Json          // string[] hoặc object
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+
+  // Audit
+  reviewedById String?
+  reviewedAt   DateTime?
+  reviewedNote String?
+
+  reviewer    User?        @relation(fields: [reviewedById], references: [id], onDelete: SetNull)
+  booking     Booking      @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([level, decision])
+}
+
+model PromotionRedemption {
+  id           String           @id @default(uuid())
+  promotionId  String
+  bookingId    String           @unique // 1 booking ↔ 1 redemption
+  userId       String
+
+  code         String           // snapshot code lúc dùng
+  amount       Int
+  status       RedemptionStatus @default(RESERVED)
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  promotion    Promotion @relation(fields: [promotionId], references: [id], onDelete: Restrict)
+  booking      Booking   @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@index([promotionId, status])
+  @@index([userId])
+  // Nếu muốn một user chỉ được 1 lần/1 promotion:
+  // @@unique([promotionId, userId])
+}
+
+model Payment {
+  id         String        @id @default(uuid())
+  bookingId  String        @unique
+  amount     Int
+  provider   String        // "MOCK", "VNPay", "MoMo", "Stripe", ...
+  status     PaymentStatus @default(PENDING)
+  externalId String        // id từ cổng thanh toán
+
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+
+  booking    Booking       @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  // Tránh đụng ID giữa các provider khác nhau
+  @@unique([provider, externalId])
+}
+
+model Photo {
+  id         String    @id @default(uuid())
+  propertyId String
+  bucket     String
+  objectKey  String
+  createdAt  DateTime  @default(now())
+
+  property   Property  @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  @@unique([bucket, objectKey])
+  @@index([propertyId])
+}
+
+model Promotion {
+  id          String         @id @default(uuid())
+  code        String         @db.Citext @unique
+  type        PromotionType
+  value       Int            // percent: 5..100; fixed: VND
+  validFrom   DateTime?
+  validTo     DateTime?
+  minNights   Int?
+  minTotal    Int?
+  usageLimit  Int?
+  usedCount   Int            @default(0)
+  isActive    Boolean        @default(true)
+
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  redemptions PromotionRedemption[]
+  bookings    Booking[]      // back-relation từ Booking.appliedPromotion
+
+  @@index([isActive, validFrom, validTo])
+}
+
+model Review {
+  id         String    @id @default(uuid())
+  propertyId String
+  userId     String
+  rating     Int
+  comment    String?
+  createdAt  DateTime  @default(now())
+
+  property   Property  @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([propertyId])
+}
+
+// ---------- Cancel Policy (pluggable) ----------
+model CancelPolicy {
+  id           String   @id @default(uuid())
+  name         String
+  isActive     Boolean  @default(true)
+  // Mảng rule: [{beforeDays:int, refundPercent:int}, ...]
+  rules        Json
+  // Tuỳ chọn tính theo giờ địa phương chính xác
+  checkInHour  Int?     // ví dụ 14 (2pm)
+  cutoffHour   Int?     // ví dụ 12 (trưa)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  bookings     Booking[]
+}
+
+// ---------- One-time Tokens / MFA ----------
 model UserToken {
   id        String        @id @default(uuid())
   userId    String?
@@ -256,7 +509,7 @@ model UserToken {
   createdAt DateTime      @default(now())
   expiresAt DateTime
   usedAt    DateTime?
-  usedByIp  String?
+  usedByIp  String? @db.Inet
 
   user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 
@@ -265,19 +518,17 @@ model UserToken {
   @@map("user_tokens")
 }
 
-
-
 model UserMfa {
-  id           String   @id @default(uuid())
-  userId       String   @unique
-  totpSecret   String   // base32 (encrypted/at-rest nếu có KMS)
-  enabled      Boolean  @default(false)
-  verifiedAt   DateTime?
-  verifyAttempts Int       @default(0)      // Thêm field này
-  lastVerifyAt   DateTime? // Thêm field này để track thời gian
-  recoveryKeyHash    String?   // Thêm field này để lưu recovery key
-  recoveryKeyUsedAt  DateTime? // Track thời gian sử dụng recovery key
-  createdAt    DateTime @default(now())
+  id               String   @id @default(uuid())
+  userId           String   @unique
+  totpSecret       String   // base32 (encrypted/at-rest nếu có KMS)
+  enabled          Boolean  @default(false)
+  verifiedAt       DateTime?
+  verifyAttempts   Int      @default(0)
+  lastVerifyAt     DateTime?
+  recoveryKeyHash  String?
+  recoveryKeyUsedAt DateTime?
+  createdAt        DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -295,4 +546,21 @@ model BackupCode {
 
   @@index([userId, usedAt])
   @@map("backup_codes")
+}
+
+// ---------- Outbox (Debezium style) & Processed Event ----------
+model Outbox {
+  id        String   @id @default(uuid())
+  eventKey  String?            // Kafka message key (vd bookingId/propertyId)
+  topic     String
+  payload   Json
+  createdAt DateTime @default(now())
+
+  @@index([topic, createdAt])
+}
+
+// Dùng để chống xử lý lặp (idempotent), lưu Debezium message id
+model ProcessedEvent {
+  id        String   @id        // Debezium message key/offset hoặc header id
+  handledAt DateTime @default(now())
 }

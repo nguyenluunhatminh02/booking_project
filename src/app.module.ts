@@ -20,6 +20,13 @@ import { DeviceFingerprintMiddleware } from './common/middlewares/finger-print.m
 import { DeviceFingerprintService } from './common/finger-print.service';
 import { MailerModule } from './modules/mailer/mailer.module';
 import { PropertyModule } from './modules/property/property.module';
+import { AnonIdMiddleware } from './common/middlewares/anon-id.middleware';
+import { FeatureFlagsModule } from './modules/feature-flag/feature-flags.module';
+import { BookingsModule } from './modules/booking/bookings.module';
+import { IdempotencyModule } from './modules/idempotency/idempotency.module';
+import { FraudModule } from './modules/fraud/fraud.module';
+import { DemoController } from './modules/demo/demo.controller';
+import { FeatureFlagsService } from './modules/feature-flag/feature-flags.service';
 
 @Module({
   imports: [
@@ -31,12 +38,22 @@ import { PropertyModule } from './modules/property/property.module';
     MfaModule,
     MailerModule,
     PropertyModule,
+    FeatureFlagsModule,
+    BookingsModule,
+    IdempotencyModule,
+    FraudModule,
   ],
-  controllers: [AppController, CsrfController, HealthController],
+  controllers: [
+    AppController,
+    CsrfController,
+    HealthController,
+    DemoController,
+  ],
   providers: [
     AppService,
     TokenBucketService,
     RedisService,
+    FeatureFlagsService,
     DeviceFingerprintService,
     { provide: APP_GUARD, useClass: RateLimitGuard },
   ],
@@ -51,6 +68,8 @@ export class AppModule implements NestModule {
       .apply(CsrfMiddleware)
       .forRoutes('*')
       .apply(DeviceFingerprintMiddleware)
-      .forRoutes('*');
+      .forRoutes('*')
+      .apply(AnonIdMiddleware)
+      .forRoutes('landing');
   }
 }

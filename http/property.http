@@ -1,83 +1,102 @@
-@host = http://localhost:3000
-# JWT của user host; nếu dùng seed: email host@demo.local / Password123!
-@token = PUT_YOUR_BEARER_TOKEN_HERE
-# ID property demo do seed tạo:
-@propertyId = prop_demo_1
+@base = http://localhost:3000
+@ts = {{$timestamp}}    # dùng để tạo email duy nhất
 
-###
-# 1) Tạo property (host)
-POST {{host}}/properties
-Authorization: Bearer {{token}}
+### 0) CSRF cho bước register
+# @name csrf_reg
+GET {{base}}/csrf/token
+
+### 1) Đăng ký (PUBLIC) → lấy accessToken
+# @name register
+POST {{base}}/auth/register
+x-csrf-token: aByHHGwz-H08M0UsZ0JpUOAl5LmvWX0BElUo
 Content-Type: application/json
 
 {
-  "title": "Cozy Studio • Dist 1",
-  "address": "123 Le Loi, D1, HCMC",
-  "description": "Near Ben Thanh Market",
-  "lat": 10.7758,
-  "lng": 106.7004,
-  "amenities": { "wifi": true, "ac": true }
+  "email": "user1@test.com",
+  "password": "Passw0rd!"
 }
 
-###
-# 2) List property của tôi (phân trang)
-GET {{host}}/properties?skip=0&take=10
-Authorization: Bearer {{token}}
+### 2) CSRF cho bước tạo property
+# @name csrf_prop_create
+GET {{base}}/csrf/token
 
-###
-# 3) Lấy chi tiết 1 property
-GET {{host}}/properties/{{propertyId}}
-Authorization: Bearer {{token}}
-
-###
-# 4) Cập nhật property
-PATCH {{host}}/properties/{{propertyId}}
-Authorization: Bearer {{token}}
+### 3) Tạo property (cần Authorization + CSRF)
+# @name createProp
+POST {{base}}/properties
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdiI6MSwic2lkIjoiNDQ0NGYzMGQtOTY2Ny00OGI4LWE5MTMtNmE0MWUzMTExMjg2Iiwic3YiOjEsImlhdCI6MTc1ODI4ODQ0MSwiZXhwIjoxNzU4Mjg5MzQxLCJhdWQiOiJib29raW5nLWZlIiwiaXNzIjoiYm9va2luZy1hcGkiLCJzdWIiOiI4Zjg1ZjU3ZC02ZTliLTRlOTgtYTFjZC03NjE3OWE3NDA0NmUiLCJqdGkiOiI5NWJmNGFiYy00M2M1LTRmYjItYjA1Mi1mYTI5NGI4N2Q4NDEifQ.Cgd-klb1ZMT-k86GRYBy1gkgmrQO9UwwKijzShMZtDc
+x-csrf-token: aByHHGwz-H08M0UsZ0JpUOAl5LmvWX0BElUo
 Content-Type: application/json
 
 {
-  "description": "Updated: very close to Opera House"
+  "title": "Villa {{ts}}",
+  "address": "123 Test St",
+  "amenities": { "wifi": true }
 }
 
-###
-# 5) Upsert lịch (TẠO MỚI -> BẮT BUỘC price; block => remaining = 0)
-POST {{host}}/properties/{{propertyId}}/calendar
-Authorization: Bearer {{token}}
+### 4) List properties (chỉ cần Authorization; GET không cần CSRF)
+GET {{base}}/properties?skip=0&take=5
+Authorization: Bearer {{register.response.body.accessToken}}
+
+### 5) Lấy chi tiết property vừa tạo
+GET {{base}}/properties/{{createProp.response.body.id}}
+Authorization: Bearer {{register.response.body.accessToken}}
+
+### 6) CSRF cho update property
+# @name csrf_prop_update
+GET {{base}}/csrf/token
+
+### 7) Update property
+PATCH {{base}}/properties/{{createProp.response.body.id}}
+Authorization: Bearer {{register.response.body.accessToken}}
+x-csrf-token: {{csrf_prop_update.response.body.token}}
 Content-Type: application/json
 
 {
-  "items": [
-    { "date": "2025-10-01", "price": 1200000, "remaining": 3 },
-    { "date": "2025-10-02", "price": 1300000, "isBlocked": true }
-  ]
+  "title": "Villa Updated {{ts}}",
+  "lat": 10.5,
+  "lng": 20.1
 }
 
-###
-# 6) Upsert lịch (CẬP NHẬT -> chỉ thay trường được gửi)
-POST {{host}}/properties/{{propertyId}}/calendar
-Authorization: Bearer {{token}}
-Content-Type: application/json
+### 8) CSRF cho upsert calendar
+# @name csrf_cal_upsert1
+GET {{base}}/csrf/token
 
-{
-  "items": [
-    { "date": "2025-10-01", "price": 1400000 },
-    { "date": "2025-10-02", "isBlocked": false, "remaining": 4 }
-  ]
-}
-
-###
-# 7) Lấy lịch (mặc định 60 ngày nếu không truyền; ở đây truyền 1 tháng)
-GET {{host}}/properties/{{propertyId}}/calendar?from=2025-10-01&to=2025-10-31
-Authorization: Bearer {{token}}
-
-###
-# 8) Case lỗi: tạo mới mà thiếu price -> 400
-POST {{host}}/properties/{{propertyId}}/calendar
-Authorization: Bearer {{token}}
+### 9) Upsert calendar (CREATE: cần price; isBlocked=true ép remaining=0)
+POST {{base}}/properties/{{createProp.response.body.id}}/calendar
+Authorization: Bearer {{register.response.body.accessToken}}
+x-csrf-token: {{csrf_cal_upsert1.response.body.token}}
 Content-Type: application/json
 
 {
   "items": [
-    { "date": "2025-11-01", "remaining": 3 }
+    { "date": "2025-12-01", "price": 100, "remaining": 3 },
+    { "date": "2025-12-02", "price": 120, "isBlocked": true },
+    { "date": "2025-12-03", "price": 150 }
   ]
 }
+
+### 10) Get calendar [from, to)
+GET {{base}}/properties/{{createProp.response.body.id}}/calendar?from=2025-12-01&to=2025-12-05
+Authorization: Bearer {{register.response.body.accessToken}}
+
+### 11) CSRF cho update calendar
+# @name csrf_cal_upsert2
+GET {{base}}/csrf/token
+
+### 12) Update calendar (UPDATE: không bắt buộc price)
+POST {{base}}/properties/{{createProp.response.body.id}}/calendar
+Authorization: Bearer {{register.response.body.accessToken}}
+x-csrf-token: {{csrf_cal_upsert2.response.body.token}}
+Content-Type: application/json
+
+{
+  "items": [
+    { "date": "2025-12-01", "price": 130 },
+    { "date": "2025-12-02", "isBlocked": false },
+    { "date": "2025-12-03", "remaining": 5 }
+  ]
+}
+
+### 13) Kiểm tra lại calendar
+GET {{base}}/properties/{{createProp.response.body.id}}/calendar?from=2025-12-01&to=2025-12-05
+Authorization: Bearer {{register.response.body.accessToken}}

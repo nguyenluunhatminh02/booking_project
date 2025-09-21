@@ -1,0 +1,55 @@
+@host = http://localhost:3000
+
+### 1) Tạo promotion (ADMIN)
+POST {{host}}/promotions
+Content-Type: application/json
+
+{
+  "code": "WELCOME10",
+  "type": "PERCENT",
+  "value": 10,
+  "validFrom": null,
+  "validTo": null,
+  "minNights": 1,
+  "minTotal": 0,
+  "usageLimit": 2,
+  "isActive": true
+}
+
+### 2) Danh sách promotions
+GET {{host}}/promotions
+
+### 3) Lấy promotion theo code
+GET {{host}}/promotions/by-code/WELCOME10
+
+### 4) Preview (không giữ slot)
+# Đổi {{bookingId}} cho đúng
+GET {{host}}/promotions/preview?bookingId={{bookingId}}&code=WELCOME10
+
+### 5) Apply on HOLD/REVIEW
+POST {{host}}/promotions/apply-on-hold
+Content-Type: application/json
+
+{
+  "bookingId": "{{bookingId}}",
+  "userId": "{{userId}}",
+  "code": "WELCOME10"
+}
+
+### 6) Confirm on PAID (first-paid-wins; không vượt quota)
+POST {{host}}/promotions/confirm-on-paid
+Content-Type: application/json
+
+{
+  "bookingId": "{{bookingId}}"
+}
+
+### 7) Release khi CANCELLED/EXPIRED/REFUNDED
+POST {{host}}/promotions/release
+Content-Type: application/json
+
+{
+  "bookingId": "{{bookingId}}",
+  "decreaseUsage": true,
+  "cause": "REFUNDED"
+}

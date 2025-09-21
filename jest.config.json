@@ -1,0 +1,14 @@
+ {
+  "testEnvironment": "node",
+  "transform": {
+    "^.+\\.(t|j)sx?$": "ts-jest"
+  },
+   "testPathIgnorePatterns": ["/dist/"],
+  "modulePathIgnorePatterns": ["/dist/"],
+  "maxWorkers": 1,
+  "moduleNameMapper": {
+    "^pdfmake$": "<rootDir>/test/__mocks__/pdfmake.ts",
+    ".+/utils/asset-path$": "<rootDir>/test/__mocks__/asset-path.ts",
+    "^src/(.*)$": "<rootDir>/src/$1"
+  }
+}

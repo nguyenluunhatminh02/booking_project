@@ -1,3 +1,4 @@
+// src/modules/booking/bookings.service.ts
 import {
   BadRequestException,
   ConflictException,
@@ -5,7 +6,13 @@ import {
   Injectable,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { addMinutes, eachDayOfInterval, subDays } from 'date-fns';
+import {
+  addDays,
+  addMinutes,
+  differenceInCalendarDays,
+  eachDayOfInterval,
+  subDays,
+} from 'date-fns';
 import { formatInTimeZone, fromZonedTime } from 'date-fns-tz';
 import env from '../../config/env.validation';
 import { FraudService } from '../fraud/fraud.service';
@@ -13,12 +20,21 @@ import { IdempotencyService } from '../idempotency/idempotency.service';
 
 const TZ = process.env.INVENTORY_TZ || 'Asia/Ho_Chi_Minh';
 const MS_PER_DAY = 86_400_000;
-const MAX_NIGHTS = 30; // giới hạn tối đa số đêm cho 1 hold
+const MAX_NIGHTS = 30;
 
-/** Chuẩn hoá 'YYYY-MM-DD' (theo TZ) hoặc ISO → bucket UTC 00:00 của TZ */
+type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH';
+type BookingStatus =
+  | 'HOLD'
+  | 'REVIEW'
+  | 'CANCELLED'
+  | 'PAID'
+  | 'CONFIRMED'
+  | 'REFUNDED';
+type CancelRule = { beforeDays: number; refundPercent: number };
+
+// Helpers
 function toUtcBucket(input: string): Date {
   if (/^\d{4}-\d{2}-\d{2}$/.test(input)) {
-    // 'YYYY-MM-DD' -> 00:00 theo TZ -> UTC
     return fromZonedTime(`${input} 00:00:00`, TZ);
   }
   const d = new Date(input);
@@ -27,21 +43,21 @@ function toUtcBucket(input: string): Date {
   return fromZonedTime(`${ymd} 00:00:00`, TZ);
 }
 
+function refundPercentByRules(daysBefore: number, rules: CancelRule[]): number {
+  for (const r of rules) if (daysBefore >= r.beforeDays) return r.refundPercent;
+  return 0;
+}
+
 @Injectable()
 export class BookingsService {
-  private cfg = env();
+  private cfg = env(); // có holdMinutes; reviewHoldDaysDefault; autoDeclineHigh
+
   constructor(
     private prisma: PrismaService,
     private fraud: FraudService,
-    private idem: IdempotencyService, // Stripe-style registry
+    private idem: IdempotencyService,
   ) {}
 
-  /**
-   * Tạo HOLD (hoặc REVIEW nếu cần) — Stripe-style idempotency:
-   * - BẮT BUỘC header `Idempotency-Key` (truyền vào idemKey).
-   * - beginOrReuse(): nếu có snapshot → trả luôn; nếu đang xử lý → 409.
-   * - Sau khi xong: completeOK()/completeFailed() để lưu snapshot.
-   */
   async hold(
     userId: string,
     propertyId: string,
@@ -52,9 +68,8 @@ export class BookingsService {
     if (!userId || !propertyId || !checkInInput || !checkOutInput) {
       throw new BadRequestException('Missing required input');
     }
-    if (!idemKey) {
+    if (!idemKey)
       throw new BadRequestException('Idempotency-Key header required');
-    }
 
     const checkIn = toUtcBucket(checkInInput);
     const checkOut = toUtcBucket(checkOutInput);
@@ -62,11 +77,9 @@ export class BookingsService {
       (checkOut.getTime() - checkIn.getTime()) / MS_PER_DAY,
     );
     if (nights <= 0) throw new BadRequestException('Invalid date range');
-    if (nights > MAX_NIGHTS) {
+    if (nights > MAX_NIGHTS)
       throw new BadRequestException(`Too many nights (>${MAX_NIGHTS})`);
-    }
 
-    // Gate idempotency theo (user, endpoint, key) + hash payload
     const endpoint = 'POST /bookings/hold';
     const payloadForHash = {
       userId,
@@ -74,7 +87,7 @@ export class BookingsService {
       checkIn: checkIn.toISOString(),
       checkOut: checkOut.toISOString(),
     };
-    const ttlMs = (this.cfg.holdMinutes + 30) * 60 * 1000; // holdMinutes + buffer
+    const ttlMs = (this.cfg.holdMinutes + 30) * 60 * 1000;
 
     const gate = await this.idem.beginOrReuse({
       userId,
@@ -83,17 +96,15 @@ export class BookingsService {
       payloadForHash,
       ttlMs,
     });
-
-    if (gate.mode === 'REUSE') return gate.response; // trả snapshot lần đầu
+    if (gate.mode === 'REUSE') return gate.response;
     if (gate.mode === 'IN_PROGRESS')
       throw new ConflictException('Request in progress');
-
-    const idemId = gate.id;
+    const idemId = (gate as any).id;
 
     try {
       const { booking, fa, wantReview } = await this.prisma.$transaction(
         async (tx) => {
-          // 1) Khóa tồn kho dải ngày [checkIn, checkOut)
+          // 1) Lock dải ngày
           const avs = await tx.$queryRaw<any[]>`
             SELECT * FROM "AvailabilityDay"
             WHERE "propertyId" = ${propertyId}
@@ -113,34 +124,85 @@ export class BookingsService {
             throw new BadRequestException('Not available');
           }
 
-          // 2) Tính tiền
+          // 2) Tiền
           const totalPrice = avs.reduce((s, a) => s + a.price, 0);
 
-          // 3) Fraud assess
+          // 3) Fraud
           const fa = await this.fraud.assess(userId, totalPrice);
+          const level = fa.level as RiskLevel;
           const wantReview =
-            !fa.skipped && (fa.level === 'MEDIUM' || fa.level === 'HIGH');
+            !fa.skipped && (level === 'MEDIUM' || level === 'HIGH');
 
-          // 4) Trừ tồn kho từng ngày (điều kiện chống race)
-          for (const a of avs) {
-            const { count } = await tx.availabilityDay.updateMany({
-              where: { id: a.id, isBlocked: false, remaining: { gt: 0 } },
-              data: { remaining: { decrement: 1 } },
+          // 3.1) Auto-decline HIGH (nếu bật)
+          const autoDeclineHigh = (this.cfg as any).autoDeclineHigh ?? false;
+          if (level === 'HIGH' && autoDeclineHigh) {
+            const booking = await tx.booking.create({
+              data: {
+                propertyId,
+                customerId: userId,
+                checkIn,
+                checkOut,
+                status: 'CANCELLED',
+                holdExpiresAt: null,
+                totalPrice,
+              },
             });
-            if (count !== 1) {
+            await tx.fraudAssessment.upsert({
+              where: { bookingId: booking.id },
+              update: {
+                score: fa.score,
+                level: fa.level as any,
+                reasons: fa.reasons as any,
+                decision: 'AUTO_DECLINED',
+              },
+              create: {
+                bookingId: booking.id,
+                userId,
+                score: fa.score,
+                level: fa.level as any,
+                decision: 'AUTO_DECLINED',
+                reasons: fa.reasons as any,
+              },
+            });
+            await tx.outbox.create({
+              data: {
+                topic: 'booking.auto_declined',
+                payload: { bookingId: booking.id },
+              },
+            });
+            return { booking, fa, wantReview: false as const };
+          }
+
+          // 4) Trừ kho theo id (an toàn tuyệt đối, chặn âm)
+          for (const a of avs) {
+            const affected = await tx.$executeRaw`
+              UPDATE "AvailabilityDay"
+                 SET "remaining" = "remaining" - 1
+               WHERE "id" = ${a.id}
+                 AND "isBlocked" = false
+                 AND "remaining" > 0
+            `;
+            if (Number(affected) !== 1) {
               throw new BadRequestException('Race condition on inventory');
             }
           }
 
-          // 5) Tạo booking
+          // 5) Booking
+          const reviewDays = (this.cfg as any).reviewHoldDaysDefault ?? 1;
+          const holdExpiry = wantReview
+            ? addDays(new Date(), reviewDays)
+            : addMinutes(new Date(), this.cfg.holdMinutes);
+
+          const status: BookingStatus = wantReview ? 'REVIEW' : 'HOLD';
           const booking = await tx.booking.create({
             data: {
               propertyId,
               customerId: userId,
               checkIn,
               checkOut,
-              status: wantReview ? 'REVIEW' : 'HOLD',
-              holdExpiresAt: addMinutes(new Date(), this.cfg.holdMinutes),
+              status,
+              holdExpiresAt: holdExpiry,
+              reviewDeadlineAt: wantReview ? holdExpiry : null,
               totalPrice,
             },
           });
@@ -166,7 +228,7 @@ export class BookingsService {
             });
           }
 
-          // 7) Outbox trong transaction
+          // 7) Outbox
           await tx.outbox.create({
             data: { topic: 'booking.held', payload: { bookingId: booking.id } },
           });
@@ -181,17 +243,15 @@ export class BookingsService {
 
           return { booking, fa, wantReview };
         },
-        // Optional: { isolationLevel: 'Serializable' }
       );
 
       const response = {
         id: booking.id,
-        status: booking.status as 'HOLD' | 'REVIEW',
+        status: booking.status as 'HOLD' | 'REVIEW' | 'CANCELLED',
         totalPrice: booking.totalPrice,
         holdExpiresAt: booking.holdExpiresAt,
         fraud: fa,
       };
-
       await this.idem.completeOK(idemId, response, booking.id);
       return response;
     } catch (err) {
@@ -202,7 +262,163 @@ export class BookingsService {
     }
   }
 
-  /** Dọn HOLD/REVIEW hết hạn và trả kho — tránh double-increment khi multi worker */
+  // Aliases để khớp test cũ
+  async approveReview(reviewerId: string, bookingId: string, note?: string) {
+    return this.reviewApprove(bookingId, reviewerId, note);
+  }
+  async declineReview(reviewerId: string, bookingId: string, note?: string) {
+    return this.reviewDecline(bookingId, reviewerId, note);
+  }
+
+  /** REVIEW -> CONFIRMED */
+  async reviewApprove(bookingId: string, reviewerId: string, note?: string) {
+    return await this.prisma.$transaction(async (tx) => {
+      const b = await tx.booking.findUnique({ where: { id: bookingId } });
+      if (!b) throw new BadRequestException('Booking not found');
+      if (b.status !== 'REVIEW')
+        throw new BadRequestException('Booking not in REVIEW');
+
+      await tx.fraudAssessment.update({
+        where: { bookingId },
+        data: {
+          decision: 'APPROVED',
+          reviewedById: reviewerId,
+          reviewedAt: new Date(),
+          reviewedNote: note ?? null,
+        },
+      });
+
+      const updated = await tx.booking.update({
+        where: { id: bookingId },
+        data: { status: 'CONFIRMED', reviewDeadlineAt: null },
+      });
+
+      await tx.outbox.create({
+        data: { topic: 'booking.review_approved', payload: { bookingId } },
+      });
+
+      return updated;
+    });
+  }
+
+  /** REVIEW -> CANCELLED + trả kho (theo id) */
+  async reviewDecline(bookingId: string, reviewerId: string, note?: string) {
+    return await this.prisma.$transaction(async (tx) => {
+      const b = await tx.booking.findUnique({ where: { id: bookingId } });
+      if (!b) throw new BadRequestException('Booking not found');
+      if (b.status !== 'REVIEW')
+        throw new BadRequestException('Booking not in REVIEW');
+
+      // Khóa các dòng tồn kho để tránh race
+      const avs = await tx.$queryRaw<any[]>`
+        SELECT *
+        FROM "AvailabilityDay"
+        WHERE "propertyId" = ${b.propertyId}
+          AND "date" >= ${b.checkIn}
+          AND "date" <  ${b.checkOut}
+        ORDER BY "date" ASC
+        FOR UPDATE
+      `;
+      // Trả kho: chặn vượt capacity
+      for (const a of avs) {
+        const affected = await tx.$executeRaw`
+          UPDATE "AvailabilityDay"
+             SET "remaining" = LEAST("remaining" + 1, "capacity")
+           WHERE "id" = ${a.id}
+        `;
+        if (Number(affected) !== 1) {
+          throw new ConflictException('Inventory return failed');
+        }
+      }
+
+      await tx.booking.update({
+        where: { id: bookingId },
+        data: { status: 'CANCELLED' },
+      });
+
+      await tx.fraudAssessment.update({
+        where: { bookingId },
+        data: {
+          decision: 'REJECTED',
+          reviewedById: reviewerId,
+          reviewedAt: new Date(),
+          reviewedNote: note ?? null,
+        },
+      });
+
+      await tx.outbox.create({
+        data: { topic: 'booking.review_declined', payload: { bookingId } },
+      });
+
+      return { ok: true };
+    });
+  }
+
+  /** Attach policy snapshot */
+  async attachCancelPolicy(bookingId: string, cancelPolicyId: string) {
+    return await this.prisma.$transaction(async (tx) => {
+      const b = await tx.booking.findUnique({ where: { id: bookingId } });
+      if (!b) throw new BadRequestException('Booking not found');
+
+      const p = await tx.cancelPolicy.findUnique({
+        where: { id: cancelPolicyId },
+      });
+      if (!p || !p.isActive)
+        throw new BadRequestException('Cancel policy not found or inactive');
+
+      const snapshot = {
+        name: p.name,
+        rules: p.rules as CancelRule[],
+        checkInHour: p.checkInHour ?? null,
+        cutoffHour: p.cutoffHour ?? null,
+      };
+
+      const updated = await tx.booking.update({
+        where: { id: bookingId },
+        data: { cancelPolicyId, cancelPolicySnapshot: snapshot as any },
+      });
+
+      await tx.outbox.create({
+        data: {
+          topic: 'booking.policy_attached',
+          payload: { bookingId, cancelPolicyId },
+        },
+      });
+
+      return updated;
+    });
+  }
+
+  /** Preview refund theo snapshot */
+  async previewRefund(bookingId: string, cancelAt: Date) {
+    const b = await this.prisma.booking.findUnique({
+      where: { id: bookingId },
+    });
+    if (!b) throw new BadRequestException('Booking not found');
+
+    const snap = (b as any).cancelPolicySnapshot as {
+      rules: CancelRule[];
+      checkInHour?: number | null;
+    } | null;
+
+    if (!snap?.rules?.length) return { percent: 0, refundAmount: 0 };
+
+    const checkInYmd = formatInTimeZone(b.checkIn, TZ, 'yyyy-MM-dd');
+    const checkInAtTz = fromZonedTime(`${checkInYmd} 00:00:00`, TZ);
+    const cancelYmd = formatInTimeZone(cancelAt, TZ, 'yyyy-MM-dd');
+    const cancelAtTz = fromZonedTime(`${cancelYmd} 00:00:00`, TZ);
+
+    const daysBefore = differenceInCalendarDays(checkInAtTz, cancelAtTz);
+    const rulesSorted = [...snap.rules].sort(
+      (a, b) => b.beforeDays - a.beforeDays,
+    );
+    const percent = refundPercentByRules(daysBefore, rulesSorted);
+    const amount = Math.floor((b.totalPrice * percent) / 100);
+
+    return { percent, refundAmount: amount };
+  }
+
+  /** Expire HOLD/REVIEW + trả kho (theo id) */
   async expireHolds(now = new Date()) {
     let total = 0;
 
@@ -219,7 +435,6 @@ export class BookingsService {
 
       for (const b of batch) {
         await this.prisma.$transaction(async (tx) => {
-          // 1) Chuyển trạng thái có điều kiện (guard) – nếu đã xử lý nơi khác, bỏ qua
           const { count } = await tx.booking.updateMany({
             where: {
               id: b.id,
@@ -230,19 +445,23 @@ export class BookingsService {
           });
           if (count === 0) return;
 
-          // 2) Trả kho đúng số ngày đã giữ
-          const days = eachDayOfInterval({
-            start: b.checkIn,
-            end: subDays(b.checkOut, 1),
-          });
-          for (const d of days) {
-            await tx.availabilityDay.updateMany({
-              where: { propertyId: b.propertyId, date: d },
-              data: { remaining: { increment: 1 } },
-            });
+          const avs = await tx.$queryRaw<any[]>`
+            SELECT *
+            FROM "AvailabilityDay"
+            WHERE "propertyId" = ${b.propertyId}
+              AND "date" >= ${b.checkIn}
+              AND "date" <  ${b.checkOut}
+            ORDER BY "date" ASC
+            FOR UPDATE
+          `;
+          for (const a of avs) {
+            await tx.$executeRaw`
+              UPDATE "AvailabilityDay"
+                 SET "remaining" = LEAST("remaining" + 1, "capacity")
+               WHERE "id" = ${a.id}
+            `;
           }
 
-          // 3) Outbox
           await tx.outbox.create({
             data: { topic: 'booking.expired', payload: { bookingId: b.id } },
           });
@@ -255,7 +474,7 @@ export class BookingsService {
     return { expired: total };
   }
 
-  /** Khách tự huỷ HOLD/REVIEW, trả kho và phát outbox — chống race với expire/paid */
+  /** Khách tự huỷ HOLD/REVIEW + trả kho (theo id) */
   async cancelHold(userId: string, bookingId: string) {
     const b = await this.prisma.booking.findUnique({
       where: { id: bookingId },
@@ -264,22 +483,27 @@ export class BookingsService {
     if (b.customerId !== userId) throw new ForbiddenException();
 
     const updated = await this.prisma.$transaction(async (tx) => {
-      // Guard chuyển trạng thái có điều kiện để tránh double-increment
       const { count } = await tx.booking.updateMany({
         where: { id: b.id, status: { in: ['HOLD', 'REVIEW'] } },
         data: { status: 'CANCELLED' },
       });
       if (count === 0) throw new BadRequestException('Already processed');
 
-      const days = eachDayOfInterval({
-        start: b.checkIn,
-        end: subDays(b.checkOut, 1),
-      });
-      for (const d of days) {
-        await tx.availabilityDay.updateMany({
-          where: { propertyId: b.propertyId, date: d },
-          data: { remaining: { increment: 1 } },
-        });
+      const avs = await tx.$queryRaw<any[]>`
+        SELECT *
+        FROM "AvailabilityDay"
+        WHERE "propertyId" = ${b.propertyId}
+          AND "date" >= ${b.checkIn}
+          AND "date" <  ${b.checkOut}
+        ORDER BY "date" ASC
+        FOR UPDATE
+      `;
+      for (const a of avs) {
+        await tx.$executeRaw`
+          UPDATE "AvailabilityDay"
+             SET "remaining" = LEAST("remaining" + 1, "capacity")
+           WHERE "id" = ${a.id}
+        `;
       }
 
       const ret = await tx.booking.findUnique({ where: { id: b.id } });
@@ -292,5 +516,62 @@ export class BookingsService {
     });
 
     return updated;
+  }
+
+  /** Huỷ PAID/CONFIRMED → REFUNDED (mock) */
+  async cancelPaidOrConfirmed(userId: string, bookingId: string) {
+    return await this.prisma.$transaction(async (tx) => {
+      const b = await tx.booking.findUnique({ where: { id: bookingId } });
+      if (!b) throw new BadRequestException('Booking not found');
+      if (b.customerId !== userId) throw new ForbiddenException();
+      if (b.status !== 'PAID' && b.status !== 'CONFIRMED') {
+        throw new BadRequestException('Not cancellable in current status');
+      }
+
+      const snap = (b as any).cancelPolicySnapshot as {
+        rules?: CancelRule[];
+      } | null;
+      let refundPercent = 0;
+      if (snap?.rules?.length) {
+        const rulesSorted = [...snap.rules].sort(
+          (a, b) => b.beforeDays - a.beforeDays,
+        );
+        refundPercent = rulesSorted[0].refundPercent ?? 0; // demo
+      }
+      const refundAmount = Math.floor((b.totalPrice * refundPercent) / 100);
+
+      await tx.payment.updateMany({
+        where: { bookingId, status: 'SUCCEEDED' },
+        data: { status: 'REFUNDED', refundAmount },
+      });
+
+      const avs = await tx.$queryRaw<any[]>`
+        SELECT *
+        FROM "AvailabilityDay"
+        WHERE "propertyId" = ${b.propertyId}
+          AND "date" >= ${b.checkIn}
+          AND "date" <  ${b.checkOut}
+        ORDER BY "date" ASC
+        FOR UPDATE
+      `;
+      for (const a of avs) {
+        await tx.$executeRaw`
+          UPDATE "AvailabilityDay"
+             SET "remaining" = LEAST("remaining" + 1, "capacity")
+           WHERE "id" = ${a.id}
+        `;
+      }
+
+      const updated = await tx.booking.update({
+        where: { id: bookingId },
+        data: { status: 'REFUNDED' },
+      });
+
+      await tx.outbox.create({
+        data: { topic: 'booking.refunded', payload: { bookingId } },
+      });
+
+      return updated;
+    });
   }
 }

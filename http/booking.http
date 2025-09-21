@@ -1,82 +1,154 @@
-@host = http://localhost:3000
-@token = PUT_YOUR_BEARER_TOKEN_HERE
-@propertyId = prop_demo_1
+@base = http://localhost:3000
+@user = u1
+@reviewer = rev1
 
-# Dùng UUID ngẫu nhiên cho mỗi request "ghi"
-@idemKey1 = 6e93c2a3-4d0f-4a29-9d9a-9f1e9aee1b3c
-@idemKey2 = 11111111-2222-3333-4444-555555555555
-
-###
-# 1) HOLD lần 1 — tạo giữ chỗ (trả HOLD hoặc REVIEW tùy fraud)
-POST {{host}}/bookings/hold
-Authorization: Bearer {{token}}
-Content-Type: application/json
-Idempotency-Key: {{idemKey1}}
-
-{
-  "propertyId": "{{propertyId}}",
-  "checkIn":  "2025-10-10",
-  "checkOut": "2025-10-12"
-}
-
-###
-# 2) HOLD retry — cùng key & payload → trả snapshot lần 1
-POST {{host}}/bookings/hold
-Authorization: Bearer {{token}}
-Content-Type: application/json
-Idempotency-Key: {{idemKey1}}
-
-{
-  "propertyId": "{{propertyId}}",
-  "checkIn":  "2025-10-10",
-  "checkOut": "2025-10-12"
-}
-
-###
-# 3) HOLD reuse key nhưng payload KHÁC → 422 (bị chặn)
-POST {{host}}/bookings/hold
-Authorization: Bearer {{token}}
-Content-Type: application/json
-Idempotency-Key: {{idemKey1}}
-
-{
-  "propertyId": "{{propertyId}}",
-  "checkIn":  "2025-10-11",
-  "checkOut": "2025-10-13"
-}
-
-###
-# 4) HOLD khác với key MỚI → tạo booking khác (nếu còn tồn)
-POST {{host}}/bookings/hold
-Authorization: Bearer {{token}}
-Content-Type: application/json
-Idempotency-Key: {{idemKey2}}
-
-{
-  "propertyId": "{{propertyId}}",
-  "checkIn":  "2025-10-15",
-  "checkOut": "2025-10-17"
-}
-
-###
-# 5) HOLD thiếu Idempotency-Key → 400
-POST {{host}}/bookings/hold
-Authorization: Bearer {{token}}
+### 1) DEV seed: tạo property + 3 ngày (mỗi ngày còn 2 phòng)
+POST {{base}}/bookings/dev/seed-basic
 Content-Type: application/json
 
 {
-  "propertyId": "{{propertyId}}",
-  "checkIn":  "2025-10-20",
-  "checkOut": "2025-10-22"
+  "hostId": "{{user}}",
+  "from": "2025-12-01",
+  "nights": "3",
+  "price": "3000000",
+  "remaining": "2",
+  "title": "P Demo"
 }
 
-###
-# 6) CANCEL HOLD — hủy booking (điền id từ (1) hoặc (4))
-@bookingId = PUT_BOOKING_ID_HERE
-POST {{host}}/bookings/{{bookingId}}/cancel
-Authorization: Bearer {{token}}
+> {% client.global.set("propertyId", response.body.property.id); %}
 
-###
-# 7) ADMIN: expire các HOLD/REVIEW quá hạn (nếu bạn mở endpoint này)
-POST {{host}}/admin/bookings/expire
-Authorization: Bearer {{token}}
+### 2) Kiểm tra availability sau seed
+GET {{base}}/bookings/dev/availability?propertyId={{propertyId}}&from=2025-12-01&to=2025-12-04
+
+### 3) HOLD (LOW risk) → trừ kho + outbox booking.held
+POST {{base}}/bookings/hold
+Content-Type: application/json
+X-User-Id: {{user}}
+Idempotency-Key: k1
+
+{
+  "propertyId": "{{propertyId}}",
+  "checkIn": "2025-12-01",
+  "checkOut": "2025-12-04"
+}
+
+> {% client.global.set("bookingHoldId", response.body.id); %}
+
+### 4) Kiểm tra availability còn [1,1,1]
+GET {{base}}/bookings/dev/availability?propertyId={{propertyId}}&from=2025-12-01&to=2025-12-04
+
+### 5) Tạo HOLD khác để test REVIEW (ép trạng thái REVIEW)
+POST {{base}}/bookings/hold
+Content-Type: application/json
+X-User-Id: {{user}}
+Idempotency-Key: k2
+
+{
+  "propertyId": "{{propertyId}}",
+  "checkIn": "2025-12-01",
+  "checkOut": "2025-12-04"
+}
+
+> {% client.global.set("bookingReviewId", response.body.id); %}
+
+### 6) DEV: ép booking sang REVIEW (demo cho decline)
+POST {{base}}/bookings/dev/force-status/{{bookingReviewId}}
+Content-Type: application/json
+
+{
+  "status": "REVIEW"
+}
+
+### 7) DECLINE REVIEW → CANCELLED + trả kho
+POST {{base}}/bookings/{{bookingReviewId}}/review/decline
+Content-Type: application/json
+
+{
+  "reviewerId": "{{reviewer}}",
+  "note": "mismatch risk"
+}
+
+### 8) Availability phải quay lại [2,2,2]
+GET {{base}}/bookings/dev/availability?propertyId={{propertyId}}&from=2025-12-01&to=2025-12-04
+
+### 9) CANCEL HOLD của user
+POST {{base}}/bookings/{{bookingHoldId}}/cancel
+Content-Type: application/json
+
+{
+  "userId": "{{user}}"
+}
+
+### 10) Availability lại [2,2,2]
+GET {{base}}/bookings/dev/availability?propertyId={{propertyId}}&from=2025-12-01&to=2025-12-04
+
+### 11) Tạo HOLD rồi ép quá hạn để test expireHolds
+POST {{base}}/bookings/hold
+Content-Type: application/json
+X-User-Id: {{user}}
+Idempotency-Key: k3
+
+{
+  "propertyId": "{{propertyId}}",
+  "checkIn": "2025-12-01",
+  "checkOut": "2025-12-04"
+}
+
+> {% client.global.set("bookingExpireId", response.body.id); %}
+
+### 12) DEV: ép holdExpiresAt về quá khứ
+POST {{base}}/bookings/dev/force-status/{{bookingExpireId}}
+Content-Type: application/json
+
+{
+  "status": "HOLD",
+  "holdExpiresAt": "2025-01-01T00:00:00.000Z"
+}
+
+### 13) Gọi expireHolds
+POST {{base}}/bookings/expire-holds
+
+### 14) Availability lại [2,2,2]
+GET {{base}}/bookings/dev/availability?propertyId={{propertyId}}&from=2025-12-01&to=2025-12-04
+
+### 15) Policy + previewRefund: tạo booking CONFIRMED nhanh (ép trạng thái)
+POST {{base}}/bookings/hold
+Content-Type: application/json
+X-User-Id: {{user}}
+Idempotency-Key: k4
+
+{
+  "propertyId": "{{propertyId}}",
+  "checkIn": "2025-12-15",
+  "checkOut": "2025-12-18"
+}
+
+> {% client.global.set("bookingConfirmedId", response.body.id); %}
+
+POST {{base}}/bookings/dev/force-status/{{bookingConfirmedId}}
+Content-Type: application/json
+
+{
+  "status": "CONFIRMED"
+}
+
+### 16) Tạo policy & gắn (dùng Prisma API riêng tuỳ dự án; ở đây giả định có sẵn policyId = cp_1)
+# Nếu bạn có endpoint tạo policy riêng thì gọi rồi set {{policyId}}
+# Còn nếu không, bạn có thể tạo trực tiếp bằng SQL/seed. Dưới đây chỉ minh hoạ attach nếu có sẵn policy.
+# POST {{base}}/bookings/{{bookingConfirmedId}}/policy
+# Content-Type: application/json
+#
+# {
+#   "cancelPolicyId": "cp_1"
+# }
+
+### 17) Preview refund (cancelAt cách 10 ngày trước check-in → 50% nếu policy flexible)
+GET {{base}}/bookings/{{bookingConfirmedId}}/preview-refund?cancelAt=2025-12-05T00:00:00.000Z
+
+### 18) Huỷ booking CONFIRMED (mock refund)
+POST {{base}}/bookings/{{bookingConfirmedId}}/cancel-paid-or-confirmed
+Content-Type: application/json
+
+{
+  "userId": "{{user}}"
+}

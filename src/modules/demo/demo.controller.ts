@@ -1,4 +1,4 @@
-import { Controller, Get, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, Req } from '@nestjs/common';
 import { RequireFlag } from '../feature-flag/ff.guard';
 import { isEnabledForUser } from '../feature-flag/ff-rollout.util';
 import { FeatureFlagsService } from '../feature-flag/feature-flags.service';

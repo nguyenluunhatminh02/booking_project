@@ -1,0 +1,40 @@
+### (0) Bearer token (điền token thật của bạn)
+@API = http://localhost:3000
+@TOKEN = {{PUT_YOUR_JWT_HERE}}
+
+### 1) Presign upload (xin URL PUT)
+POST {{API}}/v1/files/presign-upload
+Authorization: Bearer {{TOKEN}}
+Content-Type: application/json
+
+{
+  "propertyId": "prop_123",
+  "contentType": "image/jpeg"
+}
+
+### 👉 copy "putUrl" và "objectKey" từ response bên trên
+### 2) Upload trực tiếp lên MinIO bằng presigned URL
+# Thay {{PUT_URL}} = giá trị "putUrl" và giữ nguyên Content-Type y hệt
+PUT {{PUT_URL}}
+Content-Type: image/jpeg
+
+< ./sample.jpg
+
+### 3) Attach vào DB (validate + lưu Photo)
+POST {{API}}/v1/files/attach-photo
+Authorization: Bearer {{TOKEN}}
+Content-Type: application/json
+
+{
+  "propertyId": "prop_123",
+  "objectKey": "properties/prop_123/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx.jpg"
+}
+
+### 4) Presign download để xem nhanh (nếu bucket private)
+POST {{API}}/v1/files/presign-download
+Authorization: Bearer {{TOKEN}}
+Content-Type: application/json
+
+{
+  "objectKey": "properties/prop_123/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx.jpg"
+}

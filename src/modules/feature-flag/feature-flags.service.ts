@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RedisService } from '../../common/redis.service';
+import { z } from 'zod';
 
 export type FlagRecord = {
   key: string;
@@ -8,6 +9,14 @@ export type FlagRecord = {
   payload: any;
   updatedAt?: Date;
 };
+
+// Zod schema để chặt chẽ payload
+const RolloutSchema = z.object({
+  rollout: z.number().min(0).max(100).optional(),
+  salt: z.string().optional(),
+  allowUsers: z.array(z.string()).optional(),
+  denyUsers: z.array(z.string()).optional(),
+});
 
 @Injectable()
 export class FeatureFlagsService {
@@ -29,7 +38,7 @@ export class FeatureFlagsService {
       try {
         return JSON.parse(cached);
       } catch {
-        /* empty */
+        /* ignore malformed cache */
       }
     }
 
@@ -39,9 +48,23 @@ export class FeatureFlagsService {
       select: { enabled: true, payload: true },
     });
 
-    const val = { enabled: !!row?.enabled, payload: row?.payload ?? null };
-    // set cache
-    await this.redis.setEx(this.rk(key), JSON.stringify(val), this.ttlSec);
+    // validate payload (fail-safe → null)
+    let payload: any = row?.payload ?? null;
+    try {
+      if (payload != null) payload = RolloutSchema.parse(payload);
+    } catch {
+      payload = null;
+    }
+
+    const val = { enabled: !!row?.enabled, payload };
+
+    // set cache với jitter ±20% để tránh thundering herd
+    const jitter = Math.max(
+      5,
+      Math.floor(this.ttlSec * (0.8 + Math.random() * 0.4)),
+    );
+    await this.redis.setEx(this.rk(key), JSON.stringify(val), jitter);
+
     return val;
   }
 

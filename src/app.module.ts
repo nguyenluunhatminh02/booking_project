@@ -27,6 +27,7 @@ import { IdempotencyModule } from './modules/idempotency/idempotency.module';
 import { FraudModule } from './modules/fraud/fraud.module';
 import { DemoController } from './modules/demo/demo.controller';
 import { FeatureFlagsService } from './modules/feature-flag/feature-flags.service';
+import { FilesModule } from './modules/file/files.module';
 
 @Module({
   imports: [
@@ -42,6 +43,7 @@ import { FeatureFlagsService } from './modules/feature-flag/feature-flags.servic
     BookingsModule,
     IdempotencyModule,
     FraudModule,
+    FilesModule,
   ],
   controllers: [
     AppController,

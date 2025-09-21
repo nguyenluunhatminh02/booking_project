@@ -5,8 +5,8 @@ import {
   Injectable,
   UnprocessableEntityException,
 } from '@nestjs/common';
-import { PrismaService } from 'src/prisma/prisma.service';
-import { sha256Hex } from 'src/utils/crypto.util';
+import { PrismaService } from '../../prisma/prisma.service';
+import { sha256Hex } from '../../utils/crypto.util';
 
 type IdemInit = {
   userId?: string | null;

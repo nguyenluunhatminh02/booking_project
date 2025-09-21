@@ -16,7 +16,7 @@ import { UpsertCalendarDto } from './dto/upsert-calendar.dto';
 import { GetCalendarDto } from './dto/get-calendar.dto';
 // import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard'; // nếu có
 
-type AuthedRequest = Request & { user?: { sub: string } };
+type AuthedRequest = Request & { user?: { id: string } };
 
 @Controller('properties')
 // @UseGuards(JwtAuthGuard) // bật nếu project có guard
@@ -28,7 +28,7 @@ export class PropertyController {
     @Req() req: AuthedRequest,
     @Body() dto: CreatePropertyDto,
   ) {
-    const hostId = req.user?.sub ?? 'DEV_HOST_ID';
+    const hostId = req.user?.id ?? 'DEV_HOST_ID';
     return this.service.createProperty(hostId, dto);
   }
 
@@ -38,7 +38,7 @@ export class PropertyController {
     @Query('skip') skip?: string,
     @Query('take') take?: string,
   ) {
-    const hostId = req.user?.sub ?? 'DEV_HOST_ID';
+    const hostId = req.user?.id ?? 'DEV_HOST_ID';
     return this.service.listMyProperties(hostId, {
       skip: skip ? Number(skip) : undefined,
       take: take ? Number(take) : undefined,
@@ -47,7 +47,7 @@ export class PropertyController {
 
   @Get(':id')
   async getMyPropertyById(@Req() req: AuthedRequest, @Param('id') id: string) {
-    const hostId = req.user?.sub ?? 'DEV_HOST_ID';
+    const hostId = req.user?.id ?? 'DEV_HOST_ID';
     return this.service.getMyPropertyById(hostId, id);
   }
 
@@ -57,7 +57,7 @@ export class PropertyController {
     @Param('id') id: string,
     @Body() dto: UpdatePropertyDto,
   ) {
-    const hostId = req.user?.sub ?? 'DEV_HOST_ID';
+    const hostId = req.user?.id ?? 'DEV_HOST_ID';
     return this.service.updateProperty(hostId, id, dto);
   }
 
@@ -67,7 +67,7 @@ export class PropertyController {
     @Param('id') propertyId: string,
     @Body() dto: UpsertCalendarDto,
   ) {
-    const hostId = req.user?.sub ?? 'DEV_HOST_ID';
+    const hostId = req.user?.id ?? 'DEV_HOST_ID';
     return this.service.upsertAvailability(hostId, propertyId, dto);
   }
 
@@ -77,7 +77,7 @@ export class PropertyController {
     @Param('id') propertyId: string,
     @Query() query: GetCalendarDto,
   ) {
-    const hostId = req.user?.sub ?? 'DEV_HOST_ID';
+    const hostId = req.user?.id ?? 'DEV_HOST_ID';
     return this.service.getAvailability(hostId, propertyId, query);
   }
 }

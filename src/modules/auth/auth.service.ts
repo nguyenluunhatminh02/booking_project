@@ -490,7 +490,9 @@ export class AuthService {
           ua: ctx?.ua,
           fp: ctx?.deviceFp,
         });
-      } catch {}
+      } catch {
+        /* empty */
+      }
       throw new UnauthorizedException('Device approval required');
     }
 
@@ -660,7 +662,9 @@ export class AuthService {
           note: 'reuse detected',
         });
       }
-    } catch {}
+    } catch {
+      /* empty */
+    }
     throw new UnauthorizedException('Invalid refresh token');
   }
 
@@ -703,7 +707,9 @@ export class AuthService {
               ids.map((id) => this.redis.del(`${NS}:rt:${id}`)),
             );
           }
-        } catch {}
+        } catch {
+          /* empty */
+        }
       }
     }
 

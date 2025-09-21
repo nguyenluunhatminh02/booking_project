@@ -20,6 +20,13 @@ const RawEnvSchema = z.object({
   // Thời gian giữ HOLD (phút)
   HOLD_MINUTES: z.coerce.number().int().min(1).max(180).default(15),
 
+  // --- MỚI: cấu hình cho wantReview ---
+  // Tự động từ chối nếu risk HIGH (không trừ kho), phát outbox booking.auto_declined
+  AUTO_DECLINE_HIGH: z.coerce.boolean().default(false),
+
+  // Số ngày tiếp tục giữ HOLD sau khi reviewer APPROVE (đặt deadline)
+  REVIEW_HOLD_DAYS: z.coerce.number().int().min(1).max(14).default(1),
+
   // (Tuỳ chọn) bật/tắt fraud mặc định qua flag hệ thống
   // FRAUD_CHECK_DEFAULT: z.coerce.boolean().default(true),
 });
@@ -34,7 +41,11 @@ export type AppEnv = {
   inventoryTz: string;
   holdMinutes: number;
 
-  // fraudDefault: boolean;
+  // --- MỚI ---
+  autoDeclineHigh: boolean;
+  reviewHoldDaysDefault: number;
+
+  // fraudDefault?: boolean;
 };
 
 let cached: AppEnv | null = null;
@@ -49,7 +60,6 @@ export default function env(): AppEnv {
   if (!parsed.success) {
     // In lỗi gọn gàng để dễ debug khi thiếu env
     const pretty = parsed.error.format();
-
     console.error(
       '❌ Invalid environment variables:',
       JSON.stringify(pretty, null, 2),
@@ -68,6 +78,10 @@ export default function env(): AppEnv {
 
     inventoryTz: e.INVENTORY_TZ,
     holdMinutes: e.HOLD_MINUTES,
+
+    // --- MỚI ---
+    autoDeclineHigh: e.AUTO_DECLINE_HIGH,
+    reviewHoldDaysDefault: e.REVIEW_HOLD_DAYS,
 
     // fraudDefault: e.FRAUD_CHECK_DEFAULT,
   };

@@ -1,0 +1,11 @@
+@baseUrl = http://localhost:3000
+
+### Xem PDF inline
+GET {{baseUrl}}/v1/invoices/bk_demo_123.pdf
+
+### Tải về PDF (attachment)
+GET {{baseUrl}}/v1/invoices/bk_demo_123.pdf?download=1
+
+### Gửi invoice qua email cho khách
+POST {{baseUrl}}/v1/invoices/bk_demo_123/email
+Content-Type: application/json

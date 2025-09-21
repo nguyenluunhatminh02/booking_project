@@ -1,6 +1,6 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
-import { RedisService } from 'src/common/redis.service';
-import { PrismaService } from 'src/prisma/prisma.service';
+import { RedisService } from '../../common/redis.service';
+import { PrismaService } from './../../prisma/prisma.service';
 
 const NS = 'v1:auth';
 const SKEW_SEC = 60;

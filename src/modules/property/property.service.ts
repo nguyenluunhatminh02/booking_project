@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { PrismaService } from 'src/prisma/prisma.service';
+import { PrismaService } from '../../prisma/prisma.service';
 import { CreatePropertyDto } from './dto/create-property.dto';
 import { UpdatePropertyDto } from './dto/update-property.dto';
 import { UpsertCalendarDto } from './dto/upsert-calendar.dto';
@@ -164,45 +164,61 @@ export class PropertyService {
       };
     });
 
+    // Dedupe theo ngày (giữ item cuối cùng nếu trùng)
+    const byDay = new Map<string, Norm>();
+    for (const it of normalized) {
+      byDay.set(it.date.toISOString(), it);
+    }
+    const compact = Array.from(byDay.values());
+
     // Chunk để giảm áp lực transaction
     const chunkSize = PropertyService.UPSERT_CHUNK;
     const chunks: Norm[][] = [];
-    for (let i = 0; i < normalized.length; i += chunkSize) {
-      chunks.push(normalized.slice(i, i + chunkSize));
+    for (let i = 0; i < compact.length; i += chunkSize) {
+      chunks.push(compact.slice(i, i + chunkSize));
     }
 
     let updated = 0;
     const items: any[] = [];
 
     for (const chunk of chunks) {
-      const ops = chunk.map((it) =>
-        this.prisma.availabilityDay.upsert({
+      // 1) Pre-check xem những ngày nào đã tồn tại
+      const dates = chunk.map((it) => it.date);
+      const existed = await this.prisma.availabilityDay.findMany({
+        where: { propertyId, date: { in: dates } },
+        select: { date: true },
+      });
+      const existSet = new Set(existed.map((r) => r.date.toISOString()));
+
+      // 2) Lập ops: create cần price; update thì không bắt buộc price
+      const ops = chunk.map((it) => {
+        const iso = it.date.toISOString();
+        const isCreate = !existSet.has(iso);
+
+        if (isCreate && it.price == null) {
+          throw new BadRequestException(
+            `price required on create for date=${iso.slice(0, 10)}`,
+          );
+        }
+
+        return this.prisma.availabilityDay.upsert({
           where: { propertyId_date: { propertyId, date: it.date } },
-          // Tạo mới: bắt buộc price (tránh mặc định 0 gây hiểu nhầm)
           create: {
             propertyId,
             date: it.date,
-            price:
-              it.price ??
-              (() => {
-                throw new BadRequestException(
-                  `price required on create for date=${it.date.toISOString()}`,
-                );
-              })(),
+            price: it.price!, // an toàn vì đã check ở trên khi create
             remaining: it.remaining ?? 0,
             isBlocked: it.isBlocked ?? false,
           },
-          // Cập nhật: chỉ update field được gửi
           update: {
             price: it.price ?? undefined,
             remaining: it.remaining ?? undefined,
             isBlocked: it.isBlocked ?? undefined,
           },
-        }),
-      );
+        });
+      });
 
       const res = await this.prisma.$transaction(ops);
-
       updated += res.length;
       items.push(...res);
     }

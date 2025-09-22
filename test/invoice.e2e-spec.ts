@@ -6,7 +6,7 @@ import * as request from 'supertest';
 import { InvoiceController } from '../src/modules/invoice/invoice.controller';
 import { InvoiceService } from '../src/modules/invoice/invoice.service';
 import { PrismaService } from '../src/prisma/prisma.service';
-import { MailerService } from 'src/modules/mailer/mailer.service';
+import { MailerService } from '../src/modules/mailer/mailer.service';
 
 // Keep the same mocks as unit to avoid font/files dependency
 jest.mock('../src/utils/asset-path', () => ({

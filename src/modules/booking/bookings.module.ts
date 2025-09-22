@@ -7,6 +7,7 @@ import { FraudService } from '../fraud/fraud.service';
 import { IdempotencyModule } from '../idempotency/idempotency.module';
 import { FeatureFlagsService } from '../feature-flag/feature-flags.service';
 import { RedisService } from 'src/common/redis.service';
+import { OutboxProducer } from '../outbox/outbox.producer';
 
 @Module({
   imports: [IdempotencyModule],
@@ -17,6 +18,7 @@ import { RedisService } from 'src/common/redis.service';
     FraudService,
     FeatureFlagsService,
     RedisService,
+    OutboxProducer,
   ],
   exports: [BookingsService],
 })

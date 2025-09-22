@@ -1,0 +1,18 @@
+### xem stats
+GET http://localhost:3000/outbox/stats
+
+### tạo 1 event demo
+POST http://localhost:3000/outbox/demo-emit
+Content-Type: application/json
+
+{
+  "topic": "demo.hello",
+  "key": "k1",
+  "payload": {"msg":"hi"}
+}
+
+### publish ngay
+POST http://localhost:3000/outbox/publish-now
+
+### peek hàng đợi chưa phát
+GET http://localhost:3000/outbox/peek?limit=10

@@ -1,0 +1,62 @@
+@host = http://localhost:3000
+@idemp = idem-{{timestamp}}
+@user = demo@example.com
+
+### 0) Seed user (tuỳ app bạn) — nếu đã có user/host thì bỏ qua
+POST {{host}}/auth/register
+Content-Type: application/json
+
+{
+  "email": "{{user}}",
+  "password": "Password!1"
+}
+
+### 1) Tạo property
+POST {{host}}/properties
+Content-Type: application/json
+X-User-Id: u1
+
+{
+  "title": "Villa A",
+  "address": "HCMC",
+  "amenities": {}
+}
+
+### 2) Upsert calendar (nhớ có trường capacity nếu bạn dùng)
+@propId = {{last.response.body.id}}
+POST {{host}}/properties/{{propId}}/calendar
+Content-Type: application/json
+X-User-Id: u1
+
+{
+  "items": [
+    { "date": "2025-12-01", "price": 1000000, "remaining": 2, "capacity": 2 },
+    { "date": "2025-12-02", "price": 1200000, "remaining": 2, "capacity": 2 },
+    { "date": "2025-12-03", "price": 1500000, "remaining": 2, "capacity": 2 }
+  ]
+}
+
+### 3) HOLD
+POST {{host}}/bookings/hold
+Content-Type: application/json
+Idempotency-Key: {{idemp}}
+X-User-Id: u1
+
+{
+  "propertyId": "{{propId}}",
+  "checkIn": "2025-12-01",
+  "checkOut": "2025-12-04"
+}
+
+@bookingId = {{last.response.body.id}}
+
+### 4) Xem Outbox (đã có booking.held)
+GET {{host}}/debug/outbox?take=5
+
+### 5) (tuỳ chọn) Hết hạn ngay (gọi cron endpoint nếu có), hoặc cancel thủ công
+POST {{host}}/bookings/{{bookingId}}/cancel
+Content-Type: application/json
+X-User-Id: u1
+
+### 6) Xem lại Outbox
+GET {{host}}/debug/outbox?take=10

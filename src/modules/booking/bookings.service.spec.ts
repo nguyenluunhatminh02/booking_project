@@ -1,3 +1,4 @@
+// src/modules/booking/bookings.service.spec.ts
 import { ForbiddenException } from '@nestjs/common';
 import { BookingsService } from './bookings.service';
 import { MockPrismaBookings } from '../../../test/mocks-prisma-bookings';
@@ -49,6 +50,26 @@ class FakeIdem {
     for (const [k, v] of this.store) {
       if (v.id === id) this.store.set(k, { ...v, inProgress: false });
     }
+  }
+}
+
+// FakeOutbox: ghi vào prisma mock đúng như service thật kỳ vọng
+class FakeOutbox {
+  constructor(private readonly prisma: any) {}
+  async emit(topic: string, payload: any, eventKey?: string) {
+    return await this.prisma.outbox.create({
+      data: { topic, payload, eventKey: eventKey ?? null },
+    });
+  }
+  async emitInTx(
+    tx: any,
+    topic: string,
+    eventKey: string | null,
+    payload: any,
+  ) {
+    return await tx.outbox.create({
+      data: { topic, eventKey, payload },
+    });
   }
 }
 
@@ -148,9 +169,16 @@ describe('BookingsService (wantReview + refund)', () => {
 
     fraud = new FakeFraud();
     idem = new FakeIdem();
+    const outbox = new FakeOutbox(prisma); // ← inject outbox mock
 
     // @ts-ignore
-    svc = new BookingsService(prisma as any, fraud as any, idem as any);
+    svc = new BookingsService(
+      prisma as any,
+      fraud as any,
+      idem as any,
+      outbox as any,
+    );
+
     // patch config để test ổn định
     (svc as any).cfg = {
       holdMinutes: 10,

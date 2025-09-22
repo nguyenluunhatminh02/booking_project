@@ -1,3 +1,4 @@
+// src/modules/promotion/promotion.service.ts
 import {
   BadRequestException,
   Injectable,
@@ -6,10 +7,14 @@ import {
 import { PromotionType, RedemptionStatus } from '@prisma/client';
 import { differenceInCalendarDays, isAfter, isBefore } from 'date-fns';
 import { PrismaService } from '../../prisma/prisma.service';
+import { OutboxProducer } from '../outbox/outbox.producer';
 
 @Injectable()
 export class PromotionService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private outbox: OutboxProducer,
+  ) {}
 
   // =============== Admin CRUD ===============
   async create(dto: {
@@ -131,6 +136,7 @@ export class PromotionService {
    * - Lock row promotion theo code (FOR UPDATE)
    * - Validate hiệu lực + min rules + owner + status
    * - Tạo redemption(RESERVED) + set discount vào booking
+   * - Ghi outbox: promotion.reserved
    */
   async applyOnHold(input: {
     bookingId: string;
@@ -140,7 +146,7 @@ export class PromotionService {
     const { bookingId, userId, code } = input;
 
     return this.prisma.$transaction(async (tx) => {
-      // Row-level lock (tránh race trên cùng code/rule)
+      // Lock theo code để tránh race
       await tx.$queryRaw`SELECT id FROM "Promotion" WHERE code = ${code} FOR UPDATE`;
 
       const booking = await tx.booking.findUnique({
@@ -212,6 +218,13 @@ export class PromotionService {
         },
       });
 
+      await this.outbox.emitInTx(tx, 'promotion.reserved', booking.id, {
+        bookingId,
+        code: p.code,
+        promotionId: p.id,
+        amount: discount,
+      });
+
       return { discount, finalPrice: booking.totalPrice - discount, nights };
     });
   }
@@ -219,8 +232,9 @@ export class PromotionService {
   /**
    * Khi thanh toán thành công:
    * - Lock row promotion theo id
-   * - CAS: tăng usedCount chỉ khi còn slot (usageLimit)
-   * - Đặt redemption → APPLIED; nếu hết slot thì RELEASED
+   * - CAS usedCount theo usageLimit
+   * - APPLIED hoặc RELEASED(EXHAUSTED)
+   * - Ghi outbox tương ứng trong tx
    */
   async confirmOnPaid(bookingId: string) {
     return this.prisma.$transaction(async (tx) => {
@@ -234,8 +248,9 @@ export class PromotionService {
         return { skipped: true };
       }
 
-      // Lock promotion row
-      await tx.$queryRaw`SELECT id FROM "Promotion" WHERE id = ${red.promotion.id} FOR UPDATE`;
+      await tx.$queryRaw`
+        SELECT id FROM "Promotion" WHERE id = ${red.promotion.id} FOR UPDATE
+      `;
 
       if (red.promotion.usageLimit != null) {
         const ok = await tx.promotion.updateMany({
@@ -250,6 +265,13 @@ export class PromotionService {
             where: { bookingId },
             data: { status: RedemptionStatus.RELEASED },
           });
+
+          await this.outbox.emitInTx(tx, 'promotion.released', bookingId, {
+            bookingId,
+            code: red.promotion.code,
+            cause: 'EXHAUSTED' as const,
+          });
+
           return { status: 'RELEASED', reason: 'EXHAUSTED' as const };
         }
       } else {
@@ -264,6 +286,12 @@ export class PromotionService {
         data: { status: RedemptionStatus.APPLIED },
       });
 
+      await this.outbox.emitInTx(tx, 'promotion.applied', bookingId, {
+        bookingId,
+        code: red.promotion.code,
+        amount: red.amount,
+      });
+
       return { status: 'APPLIED' as const };
     });
   }
@@ -271,6 +299,7 @@ export class PromotionService {
   /**
    * Khi booking CANCELLED/EXPIRED/REFUNDED → RELEASED
    * - decreaseUsage=true hoặc cause='REFUNDED' → nếu trước đó APPLIED thì giảm usedCount
+   * - Ghi outbox: promotion.released
    */
   async releaseOnCancelOrExpire(
     bookingId: string,
@@ -302,6 +331,13 @@ export class PromotionService {
       await tx.booking.update({
         where: { id: bookingId },
         data: { promoCode: null, discountAmount: 0, appliedPromotionId: null },
+      });
+
+      await this.outbox.emitInTx(tx, 'promotion.released', bookingId, {
+        bookingId,
+        code: red.code,
+        cause: cause ?? 'CANCELLED',
+        decreasedUsage: shouldDecrease && red.status === 'APPLIED',
       });
 
       return {

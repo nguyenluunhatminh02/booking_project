@@ -17,6 +17,7 @@ import { formatInTimeZone, fromZonedTime } from 'date-fns-tz';
 import env from '../../config/env.validation';
 import { FraudService } from '../fraud/fraud.service';
 import { IdempotencyService } from '../idempotency/idempotency.service';
+import { OutboxProducer } from '../outbox/outbox.producer';
 
 const TZ = process.env.INVENTORY_TZ || 'Asia/Ho_Chi_Minh';
 const MS_PER_DAY = 86_400_000;
@@ -50,12 +51,13 @@ function refundPercentByRules(daysBefore: number, rules: CancelRule[]): number {
 
 @Injectable()
 export class BookingsService {
-  private cfg = env(); // có holdMinutes; reviewHoldDaysDefault; autoDeclineHigh
+  private cfg = env(); // holdMinutes; reviewHoldDaysDefault; autoDeclineHigh
 
   constructor(
     private prisma: PrismaService,
     private fraud: FraudService,
     private idem: IdempotencyService,
+    private outbox: OutboxProducer,
   ) {}
 
   async hold(
@@ -104,7 +106,7 @@ export class BookingsService {
     try {
       const { booking, fa, wantReview } = await this.prisma.$transaction(
         async (tx) => {
-          // 1) Lock dải ngày
+          // 1) Khóa dải ngày
           const avs = await tx.$queryRaw<any[]>`
             SELECT * FROM "AvailabilityDay"
             WHERE "propertyId" = ${propertyId}
@@ -164,16 +166,18 @@ export class BookingsService {
                 reasons: fa.reasons as any,
               },
             });
-            await tx.outbox.create({
-              data: {
-                topic: 'booking.auto_declined',
-                payload: { bookingId: booking.id },
-              },
-            });
+
+            await this.outbox.emitInTx(
+              tx,
+              'booking.auto_declined',
+              booking.id,
+              { bookingId: booking.id },
+            );
+
             return { booking, fa, wantReview: false as const };
           }
 
-          // 4) Trừ kho theo id (an toàn tuyệt đối, chặn âm)
+          // 4) Trừ kho theo id
           for (const a of avs) {
             const affected = await tx.$executeRaw`
               UPDATE "AvailabilityDay"
@@ -229,16 +233,16 @@ export class BookingsService {
           }
 
           // 7) Outbox
-          await tx.outbox.create({
-            data: { topic: 'booking.held', payload: { bookingId: booking.id } },
+          await this.outbox.emitInTx(tx, 'booking.held', booking.id, {
+            bookingId: booking.id,
           });
           if (wantReview) {
-            await tx.outbox.create({
-              data: {
-                topic: 'booking.review_pending',
-                payload: { bookingId: booking.id },
-              },
-            });
+            await this.outbox.emitInTx(
+              tx,
+              'booking.review_pending',
+              booking.id,
+              { bookingId: booking.id },
+            );
           }
 
           return { booking, fa, wantReview };
@@ -293,8 +297,8 @@ export class BookingsService {
         data: { status: 'CONFIRMED', reviewDeadlineAt: null },
       });
 
-      await tx.outbox.create({
-        data: { topic: 'booking.review_approved', payload: { bookingId } },
+      await this.outbox.emitInTx(tx, 'booking.review_approved', bookingId, {
+        bookingId,
       });
 
       return updated;
@@ -309,7 +313,7 @@ export class BookingsService {
       if (b.status !== 'REVIEW')
         throw new BadRequestException('Booking not in REVIEW');
 
-      // Khóa các dòng tồn kho để tránh race
+      // Khóa tồn kho
       const avs = await tx.$queryRaw<any[]>`
         SELECT *
         FROM "AvailabilityDay"
@@ -319,11 +323,12 @@ export class BookingsService {
         ORDER BY "date" ASC
         FOR UPDATE
       `;
-      // Trả kho: chặn vượt capacity
+
+      // Trả kho: +1
       for (const a of avs) {
         const affected = await tx.$executeRaw`
           UPDATE "AvailabilityDay"
-             SET "remaining" = LEAST("remaining" + 1, "capacity")
+             SET "remaining" = "remaining" + 1
            WHERE "id" = ${a.id}
         `;
         if (Number(affected) !== 1) {
@@ -346,8 +351,8 @@ export class BookingsService {
         },
       });
 
-      await tx.outbox.create({
-        data: { topic: 'booking.review_declined', payload: { bookingId } },
+      await this.outbox.emitInTx(tx, 'booking.review_declined', bookingId, {
+        bookingId,
       });
 
       return { ok: true };
@@ -378,11 +383,9 @@ export class BookingsService {
         data: { cancelPolicyId, cancelPolicySnapshot: snapshot as any },
       });
 
-      await tx.outbox.create({
-        data: {
-          topic: 'booking.policy_attached',
-          payload: { bookingId, cancelPolicyId },
-        },
+      await this.outbox.emitInTx(tx, 'booking.policy_attached', bookingId, {
+        bookingId,
+        cancelPolicyId,
       });
 
       return updated;
@@ -457,13 +460,13 @@ export class BookingsService {
           for (const a of avs) {
             await tx.$executeRaw`
               UPDATE "AvailabilityDay"
-                 SET "remaining" = LEAST("remaining" + 1, "capacity")
+                 SET "remaining" = "remaining" + 1
                WHERE "id" = ${a.id}
             `;
           }
 
-          await tx.outbox.create({
-            data: { topic: 'booking.expired', payload: { bookingId: b.id } },
+          await this.outbox.emitInTx(tx, 'booking.expired', b.id, {
+            bookingId: b.id,
           });
         });
       }
@@ -501,15 +504,15 @@ export class BookingsService {
       for (const a of avs) {
         await tx.$executeRaw`
           UPDATE "AvailabilityDay"
-             SET "remaining" = LEAST("remaining" + 1, "capacity")
+             SET "remaining" = "remaining" + 1
            WHERE "id" = ${a.id}
         `;
       }
 
       const ret = await tx.booking.findUnique({ where: { id: b.id } });
 
-      await tx.outbox.create({
-        data: { topic: 'booking.cancelled', payload: { bookingId } },
+      await this.outbox.emitInTx(tx, 'booking.cancelled', bookingId, {
+        bookingId,
       });
 
       return ret!;
@@ -557,7 +560,7 @@ export class BookingsService {
       for (const a of avs) {
         await tx.$executeRaw`
           UPDATE "AvailabilityDay"
-             SET "remaining" = LEAST("remaining" + 1, "capacity")
+             SET "remaining" = "remaining" + 1
            WHERE "id" = ${a.id}
         `;
       }
@@ -567,8 +570,8 @@ export class BookingsService {
         data: { status: 'REFUNDED' },
       });
 
-      await tx.outbox.create({
-        data: { topic: 'booking.refunded', payload: { bookingId } },
+      await this.outbox.emitInTx(tx, 'booking.refunded', bookingId, {
+        bookingId,
       });
 
       return updated;

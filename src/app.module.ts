@@ -28,9 +28,14 @@ import { FraudModule } from './modules/fraud/fraud.module';
 import { DemoController } from './modules/demo/demo.controller';
 import { FeatureFlagsService } from './modules/feature-flag/feature-flags.service';
 import { FilesModule } from './modules/file/files.module';
+import { ScheduleModule } from '@nestjs/schedule';
+import { JobsModule } from './modules/job/jobs.module';
+import { OutboxModule } from './modules/outbox/outbox.module';
 
 @Module({
   imports: [
+    OutboxModule.register(),
+    ScheduleModule.forRoot(),
     PrismaModule,
     AuthModule,
     SecurityModule,
@@ -44,6 +49,7 @@ import { FilesModule } from './modules/file/files.module';
     IdempotencyModule,
     FraudModule,
     FilesModule,
+    JobsModule,
   ],
   controllers: [
     AppController,

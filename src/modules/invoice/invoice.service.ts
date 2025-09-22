@@ -1,7 +1,5 @@
-import {
-  Injectable,
-  NotFoundException, // đổi từ InternalServerErrorException
-} from '@nestjs/common';
+// src/modules/invoice/invoice.service.ts
+import { Injectable, NotFoundException } from '@nestjs/common';
 import * as path from 'path';
 import type {
   TDocumentDefinitions,
@@ -13,9 +11,10 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { Readable } from 'stream';
 import { formatInTimeZone } from 'date-fns-tz';
 import { differenceInCalendarDays } from 'date-fns';
-import { ensureFontPaths } from '../../utils/asset-path'; // <— thêm
+import { ensureFontPaths } from '../../utils/asset-path';
 import { buildSignedQrUrl } from '../../utils/qr.util';
 import { MailerService } from '../mailer/mailer.service';
+import { OutboxProducer } from '../outbox/outbox.producer';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import PdfPrinter = require('pdfmake');
@@ -33,16 +32,15 @@ export class InvoiceService {
       italics: resolveAsset('fonts/Roboto-Italic.ttf'),
       bolditalics: resolveAsset('fonts/Roboto-BoldItalic.ttf'),
     },
-    // Có thể thêm NotoSans nếu cần fallback tiếng Việt
   };
 
-  private printer: PdfPrinter; // <— tái sử dụng
+  private printer: PdfPrinter;
 
   constructor(
     private prisma: PrismaService,
     private mailer: MailerService,
+    private outbox: OutboxProducer,
   ) {
-    // Kiểm tra file font tồn tại để fail sớm nếu path sai
     ensureFontPaths({
       Roboto: [
         this.fonts.Roboto.normal as string,
@@ -193,7 +191,6 @@ export class InvoiceService {
         },
         totalRow,
         paymentBlock,
-        // Dòng test tiếng Việt để chắc font có glyph
         {
           text: 'Tiếng Việt: Đặt chỗ/hoá đơn – Số tiền 1.234.567 ₫',
           margin: [0, 10, 0, 0],
@@ -289,5 +286,12 @@ export class InvoiceService {
         },
       ],
     });
+
+    // ✅ Emit outbox ngoài transaction (sau khi gửi mail thành công)
+    await this.outbox.emit(
+      'invoice.emailed',
+      { bookingId, to: booking.customer.email, filename },
+      bookingId, // eventKey để idempotent theo booking
+    );
   }
 }

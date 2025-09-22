@@ -1,0 +1,252 @@
+# booking-outbox-all-in-one.http
+# Yêu cầu: VS Code REST Client (hoặc Thunder/Insomnia nhập tay tương đương)
+
+@host = http://localhost:3000
+@json = application/json
+
+@csrf= hfzs4tbq-ePHjvEWhh4m7xn_-GzALL8dBxKg
+
+@feOrigin = http://localhost:5173
+
+@user_id = d56a76dd-e629-436d-8ac0-f4939fdbaa11
+
+#######################################################################
+# 0) ENV GỢI Ý (đặt trong .env trước khi chạy app)
+# OUTBOX_ENABLED=1
+# OUTBOX_POLL_MS=1000
+# OUTBOX_DELETE_AFTER_PUBLISH=1
+# (tuỳ chọn Kafka)
+# KAFKA_BROKERS=localhost:9094
+#######################################################################
+
+### 0) CSRF cho bước register
+# @name csrf_reg
+GET {{host}}/csrf/token
+
+############################
+# 1) AUTH
+############################
+### Register
+# @name register
+POST {{host}}/auth/register
+Content-Type: {{json}}
+x-csrf-token: {{csrf}}
+
+{
+  "email": "host1@example.com",
+  "password": "P@ssw0rd!!"
+}
+
+@auth = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdiI6MSwic2lkIjoiMjQ1YTcyMDktMGMzOS00ZGYwLWJkMzctOTVjODc5MGIzNzZmIiwic3YiOjEsImlhdCI6MTc1ODUzMjA0NSwiZXhwIjoxNzU4NTMyOTQ1LCJhdWQiOiJib29raW5nLWZlIiwiaXNzIjoiYm9va2luZy1hcGkiLCJzdWIiOiJkNTZhNzZkZC1lNjI5LTQzNmQtOGFjMC1mNDkzOWZkYmFhMTEiLCJqdGkiOiIzOTFkYTQ5Ni1lOWQ0LTRkOGYtOTRiNC03Y2JhZTVlM2Y4MTkifQ.ElUkG-7vaIvr9IBfoUicE7rCFvkCDPKYH6eRiqFCLsk
+@propertyId = 38bfe3aa-8d22-46c3-aed5-00a3dfe7a9fa
+
+
+### Login
+# @name login
+POST {{host}}/auth/login
+Content-Type: {{json}}
+x-csrf-token: {{csrf}}
+
+{
+  "email": "host1@example.com",
+  "password": "P@ssw0rd!!"
+}
+
+
+############################
+# 2) PROPERTY + CALENDAR
+############################
+### Tạo property
+# @name createProp
+POST {{host}}/properties
+Authorization: {{auth}}
+x-csrf-token: {{csrf}}
+Content-Type: {{json}}
+
+{
+  "title": "Beach House",
+  "address": "42 Ocean Ave",
+  "amenities": { "wifi": true, "pool": true }
+}
+
+
+### Seed lịch 3 ngày
+# Nếu schema KHÔNG có cột "capacity" → bỏ field "capacity" bên dưới.
+POST {{host}}/properties/{{propertyId}}/calendar
+Authorization: {{auth}}
+Content-Type: {{json}}
+x-csrf-token: {{csrf}}
+
+{
+  "items": [
+    { "date": "2025-12-01", "price": 1000000, "remaining": 2, "capacity": 2 },
+    { "date": "2025-12-02", "price": 1200000, "": 2, "capacity": 2 },
+    { "date": "2025-12-03", "price": 1500000, "remaining": 2, "capacity": 2 }
+  ]
+}
+
+### Xem lịchremaining
+GET {{host}}/properties/{{propertyId}}/calendar?from=2025-12-01&to=2025-12-04
+Authorization: {{auth}}
+x-csrf-token: {{csrf}}
+
+############################
+# 3) BOOKING CORE (HOLD / REUSE / CANCEL / EXPIRE)
+############################
+
+@bookingId = f722eabd-10a2-4bf3-9a3a-cc18168bb344
+@bookingStatus = HOLD
+### HOLD (idempotent) → outbox: booking.held (+ booking.review_pending nếu REVIEW)
+# @name hold1
+POST {{host}}/bookings/hold
+Authorization: {{auth}}
+Idempotency-Key: demo-hold-2
+Content-Type: {{json}}
+x-csrf-token: {{csrf}}
+X-User-Id: {{user_id}}
+
+{
+  "propertyId": "{{propertyId}}",
+  "checkIn": "2025-12-01",
+  "checkOut": "2025-12-04"
+}
+
+
+
+### Kiểm kho (-1 mỗi ngày)
+GET {{host}}/properties/{{propertyId}}/calendar?from=2025-12-01&to=2025-12-04
+Authorization: {{auth}}
+
+### REUSE cùng key (không trừ kho thêm)
+POST {{host}}/bookings/hold
+Authorization: {{auth}}
+Idempotency-Key: demo-hold-1
+Content-Type: {{json}}
+
+{
+  "propertyId": "{{propertyId}}",
+  "checkIn": "2025-12-01",
+  "checkOut": "2025-12-04"
+}
+
+### CANCEL HOLD (khách tự hủy) → outbox: booking.cancelled
+POST {{host}}/bookings/{{bookingId}}/cancel
+Authorization: {{auth}}
+
+### Tồn kho trả lại
+GET {{host}}/properties/{{propertyId}}/calendar?from=2025-12-01&to=2025-12-04
+Authorization: {{auth}}
+
+### HOLD lần nữa để test các flow sau
+# @name hold2
+POST {{host}}/bookings/hold
+Authorization: {{auth}}
+Idempotency-Key: demo-hold-2
+Content-Type: {{json}}
+
+{
+  "propertyId": "{{propertyId}}",
+  "checkIn": "2025-12-01",
+  "checkOut": "2025-12-04"
+}
+
+@bookingId2 = {{hold2.response.body.id}}
+@bookingStatus2 = {{hold2.response.body.status}}
+
+### (Tuỳ chọn) EXPIRE ngay (HOLD/REVIEW quá hạn) → outbox: booking.expired
+POST {{host}}/bookings/expire-now
+Authorization: {{auth}}
+
+### Xem lịch lại
+GET {{host}}/properties/{{propertyId}}/calendar?from=2025-12-01&to=2025-12-04
+Authorization: {{auth}}
+
+############################
+# 4) REVIEW FLOW (tuỳ chọn — cần booking đang REVIEW)
+############################
+# Nếu Fraud/FF của bạn đang bật và tạo được booking ở trạng thái REVIEW,
+# gán @reviewBookingId bằng id booking đó và chạy 2 request bên dưới.
+
+@reviewBookingId = REPLACE_WITH_REVIEW_BOOKING_ID
+
+### APPROVE REVIEW → CONFIRMED → outbox: booking.review_approved
+POST {{host}}/bookings/{{reviewBookingId}}/review/approve
+Authorization: {{auth}}
+Content-Type: {{json}}
+
+{
+  "note": "Looks good"
+}
+
+### DECLINE REVIEW → CANCELLED + trả kho → outbox: booking.review_declined
+POST {{host}}/bookings/{{reviewBookingId}}/review/decline
+Authorization: {{auth}}
+Content-Type: {{json}}
+
+{
+  "note": "High risk"
+}
+
+############################
+# 5) CANCEL POLICY (ATTACH + PREVIEW REFUND)
+############################
+### Tạo policy (nếu bạn có controller / endpoint tương ứng)
+# @name createPolicy
+POST {{host}}/cancel-policies
+Authorization: {{auth}}
+Content-Type: {{json}}
+
+{
+  "name": "Semi-Flexible",
+  "isActive": true,
+  "rules": [
+    { "beforeDays": 14, "refundPercent": 90 },
+    { "beforeDays": 7,  "refundPercent": 50 },
+    { "beforeDays": 1,  "refundPercent": 10 }
+  ]
+}
+
+@policyId = {{createPolicy.response.body.id}}
+
+### Gắn policy vào booking → outbox: booking.policy_attached
+POST {{host}}/bookings/{{bookingId2}}/attach-policy
+Authorization: {{auth}}
+Content-Type: {{json}}
+
+{
+  "cancelPolicyId": "{{policyId}}"
+}
+
+### Preview refund
+POST {{host}}/bookings/{{bookingId2}}/preview-refund
+Authorization: {{auth}}
+Content-Type: {{json}}
+
+{
+  "cancelAt": "2025-11-20T00:00:00.000Z"
+}
+
+############################
+# 6) REFUND FLOW (tuỳ chọn — cần booking PAID/CONFIRMED)
+############################
+@paidOrConfirmedBookingId = REPLACE_WITH_PAID_OR_CONFIRMED_ID
+
+### CANCEL PAID/CONFIRMED (mock refund) → outbox: booking.refunded
+POST {{host}}/bookings/{{paidOrConfirmedBookingId}}/cancel-paid
+Authorization: {{auth}}
+Content-Type: {{json}}
+
+{
+  "reason": "Change of plans"
+}
+
+############################
+# 7) OUTBOX DIAGNOSTICS
+############################
+### Xem outbox pending (trước relay)
+GET {{host}}/outbox/pending
+Authorization: {{auth}}
+
+### Trigger relay 1 lần thủ công (nếu bạn bật relay cron, có thể bỏ qua)
+POST {{host}}/outbox/relay-run
+Authorization: {{auth}}

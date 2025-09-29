@@ -6,6 +6,9 @@ import { MailerService } from '../mailer/mailer.service';
 import { OutboxModule } from '../outbox/outbox.module';
 import { SagaCoordinator } from './saga.coordinator';
 import { EventsConsumerService } from './events-consumer.service';
+import { ThumbnailService } from '../file/thumbnail.service';
+import { AntivirusService } from '../file/antivirus.service';
+import { MinioService } from '../file/minio.service';
 // Nếu InvoiceService phụ thuộc module khác (vd. FileModule), import thêm ở đây.
 
 @Module({
@@ -19,6 +22,9 @@ import { EventsConsumerService } from './events-consumer.service';
     InvoiceService,
     SagaCoordinator,
     EventsConsumerService,
+    ThumbnailService,
+    AntivirusService,
+    MinioService,
   ],
   exports: [SagaCoordinator],
 })

@@ -27,10 +27,16 @@ enum PromotionType {
   FIXED 
 }
 
+enum ReviewStatus { 
+  ACTIVE 
+  HIDDEN 
+  DELETED 
+}
+
 enum RiskLevel { 
   LOW 
   MEDIUM 
-  HIGH
+  HIGH 
 } // dùng cho FraudAssessment.level
 
 enum FraudDecision { 
@@ -45,8 +51,8 @@ enum SessionRevokeReason {
   ADMIN_FORCE 
   SECURITY_REUSE 
   EXPIRED 
-  OTHER 
-}
+  OTHER
+ }
 
 enum SecurityEventType { 
   LOGIN_SUCCESS 
@@ -61,12 +67,18 @@ enum UserTokenType {
   DEVICE_APPROVAL 
 }
 
-enum PaymentStatus { 
-  PENDING 
-  SUCCEEDED 
-  FAILED 
-  REFUNDED
+enum MediaType {
+  IMAGE
+  VIDEO
 }
+
+enum MalwareScanStatus {
+  PENDING
+  CLEAN
+  INFECTED
+  ERROR
+}
+
 
 enum BookingStatus { 
   HOLD 
@@ -135,7 +147,7 @@ model User {
   UserMfa         UserMfa[]
   BackupCode      BackupCode[]
   FraudAssessment FraudAssessment[]
-  Review          Review[]
+  reviewsAuthored Review[]         @relation("ReviewAuthor") // <— đặt tên rõ ràng
 
   @@map("users")
 }
@@ -314,9 +326,14 @@ model Property {
   host        User      @relation("HostProperties", fields: [hostId], references: [id], onDelete: Cascade)
   availability AvailabilityDay[]
   bookings    Booking[]
-  photos      Photo[]
   reviews     Review[]
 
+  // Rating aggregates
+  ratingCount     Int       @default(0)
+  ratingAvg       Float     @default(0)
+  ratingUpdatedAt DateTime?
+
+  mediaLinks   PropertyFile[]
   @@index([hostId])
 }
 
@@ -365,7 +382,10 @@ model Booking {
   // NEW: deadline cho reviewer (tuỳ chọn)
   reviewDeadlineAt   DateTime?
 
-  // REVIEW: 1–1 (đổi từ mảng sang đơn)
+  // REVIEW: back relation 1–1
+  review             Review?
+
+  // Fraud
   fraudAssessment    FraudAssessment?
 
   PromotionRedemption  PromotionRedemption[]
@@ -376,6 +396,7 @@ model Booking {
   @@index([propertyId, status])
   @@index([status, holdExpiresAt])      // phục vụ saga expire
   @@index([status, reviewDeadlineAt])   // SLA review (tuỳ chọn)
+  @@index([propertyId, customerId, checkOut]) // phục vụ kiểm tra "đã ở xong"
 }
 
 model FraudAssessment {
@@ -422,37 +443,67 @@ model PromotionRedemption {
   // @@unique([promotionId, userId]) // nếu muốn giới hạn 1 user / 1 promo
 }
 
-model Payment {
-  id              String        @id @default(uuid())
-  bookingId       String        @unique
-  amount          Int
-  provider        String        // "MOCK", "VNPay", "MoMo", "Stripe", ...
-  status          PaymentStatus @default(PENDING)
-  externalId      String        // id từ cổng thanh toán
+// ---------- Files & Property Media ----------
+model File {
+  id           String    @id @default(uuid())
+  key          String    @unique
+  url          String
+  bytes        Int?
+  width        Int?
+  height       Int?
+  contentType  String?
+  checksum     String?
+  tags         String[]
+  createdById  String?
 
-  // (tuỳ chọn) theo dõi hoàn tiền
-  refundAmount     Int?
-  refundExternalId String?
+   // NEW: trạng thái quét virus
+  malwareStatus    MalwareScanStatus @default(PENDING)
+  malwareSignature String?
+  scannedAt        DateTime?
 
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
-  booking         Booking       @relation(fields: [bookingId], references: [id], onDelete: Cascade)
 
-  @@unique([provider, externalId])
+  propertyLinks PropertyFile[]
+  variants      FileVariant[]
+
+  @@index([createdById, createdAt])
 }
 
-model Photo {
-  id         String    @id @default(uuid())
-  propertyId String
-  bucket     String
-  objectKey  String
-  createdAt  DateTime  @default(now())
+model PropertyFile {
+  id          String    @id @default(uuid())
+  propertyId  String
+  fileId      String
+  type        MediaType
+  sortOrder   Int       @default(0)
+  isCover     Boolean   @default(false)
+  createdAt   DateTime  @default(now())
 
-  property   Property  @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  property    Property  @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  file        File      @relation(fields: [fileId], references: [id], onDelete: Cascade)
 
-  @@unique([bucket, objectKey])
-  @@index([propertyId])
+  @@unique([propertyId, fileId])
+  @@index([propertyId, sortOrder])
+  @@index([propertyId, isCover])
+}
+
+model FileVariant {
+  id           String   @id @default(uuid())
+  fileId       String
+  kind         String
+  key          String
+  url          String
+  width        Int?
+  height       Int?
+  bytes        Int?
+  contentType  String?
+  createdAt    DateTime @default(now())
+
+  file         File     @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  @@unique([fileId, kind])
+  @@index([fileId])
 }
 
 model Promotion {
@@ -475,20 +526,6 @@ model Promotion {
   bookings    Booking[]
 
   @@index([isActive, validFrom, validTo])
-}
-
-model Review {
-  id         String    @id @default(uuid())
-  propertyId String
-  userId     String
-  rating     Int
-  comment    String?
-  createdAt  DateTime  @default(now())
-
-  property   Property  @relation(fields: [propertyId], references: [id], onDelete: Cascade)
-  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([propertyId])
 }
 
 // ---------- Cancel Policy (pluggable) ----------
@@ -570,4 +607,89 @@ model Outbox {
 model ProcessedEvent {
   id        String   @id        // Debezium message key/offset hoặc header id
   handledAt DateTime @default(now())
+}
+
+// ---------- Reviews ----------
+model Review {
+  id         String       @id @default(uuid())
+  bookingId  String       @unique            // 1 booking = 1 review
+  propertyId String
+  authorId   String
+  rating     Int
+  body       String?
+  status     ReviewStatus @default(ACTIVE)
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+
+  booking    Booking      @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  property   Property     @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  author     User         @relation("ReviewAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([propertyId, status, createdAt, id]) // list theo property, lọc status, keyset mượt
+  @@index([authorId, createdAt])
+}
+
+
+// ============ Payments ============
+enum PaymentProvider {
+  MOCK
+  STRIPE
+  VNPAY
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+  REFUNDED
+  CANCELED
+}
+
+enum RefundStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+}
+
+model Payment {
+  id         String          @id @default(uuid())
+  bookingId  String          @unique
+  provider   PaymentProvider
+  amount     Int
+  currency   String          @default("VND")
+  status     PaymentStatus   @default(PENDING)
+  intentId   String?
+  chargeId   String?
+  metadata   Json?
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
+
+  booking    Booking         @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  refunds    Refund[]
+
+  @@index([provider, chargeId])
+  // NOTE: KHÔNG dùng @@unique([provider, intentId]) ở đây để chuyển sang partial unique index (SQL) bên dưới
+}
+
+model Refund {
+  id               String        @id @default(uuid())
+  paymentId        String
+  amount           Int
+  status           RefundStatus  @default(PENDING)
+  providerRefundId String?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  payment          Payment       @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  @@index([paymentId])
+}
+
+model ProcessedWebhook {
+  id        String           @id         // ví dụ: "STRIPE:evt_123" / "VNPAY:vnpRef:payDate"
+  provider  PaymentProvider
+  raw       Json?
+  at        DateTime         @default(now())
+
+  @@index([provider, at])
 }

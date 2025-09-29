@@ -8,9 +8,10 @@ import {
   OUTBOX_AUTOSTART,
   OUTBOX_KAFKA_ENABLED,
 } from './outbox.tokens';
-import type { KafkaProducerLike, KafkaMessage } from './types';
+import type { KafkaProducerLike, KafkaMessageInput } from './types';
 // ⚠ path này tùy dự án bạn: nếu alias "src/*" chưa map trong tsconfig, đổi thành '../../common/redis.service'
 import { RedisService } from '../../common/redis.service';
+import { logLevel } from 'kafkajs';
 
 function buildConsoleProducer(): KafkaProducerLike {
   const { Logger } = require('@nestjs/common');
@@ -67,6 +68,7 @@ async function buildKafkaProducer(
       .filter(Boolean),
     ssl,
     sasl,
+    logLevel: logLevel.INFO,
   });
 
   // Dùng legacy partitioner để khỏi warning v2
@@ -78,7 +80,7 @@ async function buildKafkaProducer(
   return {
     connect: () => producer.connect(),
     disconnect: () => producer.disconnect(),
-    send: async (topic, messages: KafkaMessage[]) => {
+    send: async (topic, messages: KafkaMessageInput[]) => {
       await producer.send({ topic, messages });
     },
   };

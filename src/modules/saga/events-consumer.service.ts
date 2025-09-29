@@ -52,7 +52,7 @@ export class EventsConsumerService implements OnModuleInit, OnModuleDestroy {
     this.kafka = new Kafka({
       brokers,
       clientId: process.env.KAFKA_CONSUMER_CLIENT_ID || 'booking-app',
-      logLevel: logLevel.NOTHING,
+      logLevel: logLevel.INFO,
     });
 
     this.consumer = this.kafka.consumer({

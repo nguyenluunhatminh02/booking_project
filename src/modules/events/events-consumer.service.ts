@@ -1,41 +1,52 @@
 import {
   Injectable,
   Logger,
-  OnModuleInit,
   OnModuleDestroy,
+  OnModuleInit,
+  Optional,
 } from '@nestjs/common';
 import { Kafka, logLevel, Consumer, EachMessagePayload } from 'kafkajs';
 import { PrismaService } from '../../prisma/prisma.service';
-import { MailerService } from '../mailer/mailer.service';
-// (tuỳ bạn muốn gắn thêm)
-import { PromotionService } from '../promotion/promotion.service';
-import { InvoiceService } from '../invoice/invoice.service';
-
-type EventEnvelope = {
-  id: string;
-  topic: string; // có thể đã bao gồm prefix
-  createdAt: string;
-  payload: any; // business payload
-  v: number;
-};
+import { SagaCoordinator } from '../saga/saga.coordinator';
+import { topicName } from '../kafka/topicName';
 
 const RAW_TOPICS =
   process.env.EVENT_TOPICS ??
   [
-    'booking.held',
+    'file.uploaded',
+    'file.variant_created',
+    'inventory.events',
+    'booking.events',
+    'booking.policy_attached',
+    'booking.auto_declined',
     'booking.review_pending',
     'booking.review_approved',
     'booking.review_declined',
-    'booking.cancelled',
+    'booking.held',
     'booking.expired',
+    'booking.cancelled',
     'booking.refunded',
-    // nếu có, thêm: 'booking.paid','booking.confirmed'
+    'booking.paid',
+    'booking.confirmed',
+    'payment.intent_created',
+    'payment.succeeded',
+    'payment.failed',
+    'payment.refunded',
+    'payment.refund_failed',
+    'payment.refund_requested',
+    'promotion.reserved',
+    'promotion.applied',
+    'promotion.released',
+    'review.created',
+    'review.updated',
+    'review.deleted',
+    'invoice.emailed',
   ].join(',');
 
-const TOPICS = RAW_TOPICS.split(',')
+const TOPICS_RAW = RAW_TOPICS.split(',')
   .map((s) => s.trim())
   .filter(Boolean);
-const TOPIC_PREFIX = process.env.KAFKA_TOPIC_PREFIX ?? ''; // ví dụ 'dev.'
+const TOPIC_PREFIX = process.env.KAFKA_TOPIC_PREFIX ?? '';
 
 @Injectable()
 export class EventsConsumerService implements OnModuleInit, OnModuleDestroy {
@@ -46,10 +57,7 @@ export class EventsConsumerService implements OnModuleInit, OnModuleDestroy {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly mailer: MailerService,
-    // có thể inject để chạy hậu quả nghiệp vụ
-    private readonly promo: PromotionService,
-    private readonly invoice: InvoiceService,
+    @Optional() private readonly coordinator?: SagaCoordinator,
   ) {}
 
   async onModuleInit() {
@@ -58,6 +66,10 @@ export class EventsConsumerService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
+    // Delay để đảm bảo Kafka sẵn sàng
+    this.logger.log('Waiting for Kafka to be ready...');
+    await new Promise((resolve) => setTimeout(resolve, 10000)); // 10 giây
+
     const brokers = (process.env.KAFKA_BROKERS || 'localhost:9094')
       .split(',')
       .map((s) => s.trim())
@@ -65,34 +77,108 @@ export class EventsConsumerService implements OnModuleInit, OnModuleDestroy {
 
     this.kafka = new Kafka({
       brokers,
-      clientId: process.env.KAFKA_CLIENT_ID || 'booking-app',
-      logLevel: logLevel.NOTHING,
+      clientId: process.env.KAFKA_CONSUMER_CLIENT_ID || 'booking-app',
+      logLevel: logLevel.INFO,
+      // Thêm retry configuration
+      retry: {
+        initialRetryTime: 100,
+        retries: 8,
+      },
+      connectionTimeout: 10000,
+      requestTimeout: 30000,
     });
 
-    this.consumer = this.kafka.consumer({
-      groupId: process.env.KAFKA_GROUP_ID || 'booking-app-consumer',
-    });
+    // Retry mechanism cho việc khởi tạo consumer
+    let retries = 3;
+    while (retries > 0) {
+      try {
+        await this.initializeConsumer();
+        break;
+      } catch (error) {
+        retries--;
+        this.logger.error(
+          `Consumer initialization failed, retries left: ${retries}`,
+          error,
+        );
+        if (retries === 0) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+      }
+    }
+  }
 
-    await this.consumer.connect();
+  private async initializeConsumer() {
+    // ⚠️ Chuẩn hoá tên topic + loại trùng + chống double-prefix
+    const topicsFinal = Array.from(
+      new Set(TOPICS_RAW.map((t) => topicName(TOPIC_PREFIX, t))),
+    );
 
-    // subscribe theo prefix
-    for (const t of TOPICS) {
-      const full = `${TOPIC_PREFIX}${t}`;
-      await this.consumer.subscribe({ topic: full, fromBeginning: false });
+    this.logger.log(`Topics to subscribe: ${topicsFinal.join(', ')}`);
+    if (!this.kafka) {
+      throw new Error('Kafka instance is not initialized');
+    }
+    // (khuyến nghị) Preflight: verify topic tồn tại để báo rõ tên nào sai
+    const admin = this.kafka.admin();
+    try {
+      await admin.connect();
+      const meta = await admin.fetchTopicMetadata({ topics: topicsFinal });
+      const known = new Set(meta.topics.map((t) => t.name));
+      const missing = topicsFinal.filter((t) => !known.has(t));
+      await admin.disconnect();
+
+      if (missing.length) {
+        this.logger.error(`Missing topics: ${missing.join(', ')}`);
+        throw new Error(`Kafka topics missing: ${missing.join(', ')}`);
+      }
+
+      this.logger.log(`All topics verified: ${topicsFinal.join(', ')}`);
+    } catch (error) {
+      await admin.disconnect();
+      throw error;
     }
 
-    await this.consumer.run({
-      // at-least-once: để mặc định autoCommit (commit theo interval/threshold)
-      eachMessage: async (payload) => this.handleMessage(payload),
+    this.consumer = this.kafka.consumer({
+      groupId: process.env.KAFKA_CONSUMER_GROUP || 'booking-app-consumer',
+      // Thêm consumer configuration
+      sessionTimeout: 30000,
+      heartbeatInterval: 3000,
+      maxWaitTimeInMs: 100,
+      retry: {
+        initialRetryTime: 100,
+        retries: 8,
+      },
     });
 
     this.logger.log(
-      `Consumer connected. Topics: ${TOPICS.map((t) => TOPIC_PREFIX + t).join(', ')}`,
+      `Connecting consumer with group: ${process.env.KAFKA_CONSUMER_GROUP || 'booking-app-consumer'}`,
+    );
+    await this.consumer.connect();
+    this.logger.log('Consumer connected successfully');
+
+    // Subscribe theo danh sách đã chuẩn hoá
+    for (const t of topicsFinal) {
+      await this.consumer.subscribe({ topic: t, fromBeginning: false });
+      this.logger.log(`Subscribed to topic: ${t}`);
+    }
+
+    await this.consumer.run({
+      autoCommit: true,
+      eachMessage: (p) => this.handleMessage(p),
+    });
+
+    this.logger.log(
+      `Consumer started and running with group: ${process.env.KAFKA_CONSUMER_GROUP || 'booking-app-consumer'}`,
     );
   }
 
   async onModuleDestroy() {
-    await this.consumer?.disconnect().catch(() => {});
+    if (this.consumer) {
+      try {
+        await this.consumer.disconnect();
+        this.logger.log('Consumer disconnected');
+      } catch (error) {
+        this.logger.error('Error disconnecting consumer:', error);
+      }
+    }
   }
 
   private getHeaderString(h: unknown): string | undefined {
@@ -103,97 +189,47 @@ export class EventsConsumerService implements OnModuleInit, OnModuleDestroy {
     return undefined;
   }
 
-  private async handleMessage({ topic, message }: EachMessagePayload) {
+  private async handleMessage({
+    topic,
+    partition,
+    message,
+  }: EachMessagePayload) {
     try {
       const text = message.value?.toString('utf8') || '{}';
-      const evt = JSON.parse(text) as EventEnvelope;
+      const evt = JSON.parse(text) as {
+        id?: string;
+        topic?: string;
+        payload: any;
+        v?: number;
+      };
 
-      // Lấy eventId ưu tiên từ header, fallback evt.id
-      const eventId =
-        this.getHeaderString(message.headers?.['x-event-id']) || evt.id;
+      const headerId = this.getHeaderString(message.headers?.['x-event-id']);
+      const processedId = headerId || `${topic}:${partition}:${message.offset}`;
 
-      if (!eventId) {
-        this.logger.warn(`skip message without eventId on topic=${topic}`);
-        return;
-      }
-
-      // Idempotent: bỏ nếu đã xử lý
       const existed = await this.prisma.processedEvent.findUnique({
-        where: { id: eventId },
+        where: { id: processedId },
       });
       if (existed) return;
 
-      // Bỏ prefix để router ngắn
       const shortTopic = (evt.topic || topic).replace(TOPIC_PREFIX, '');
 
-      await this.dispatch(shortTopic, evt);
+      if (this.coordinator) {
+        await this.coordinator
+          .handle({
+            topic: shortTopic,
+            payload: evt.payload,
+            key: message.key?.toString() ?? null,
+          })
+          .catch((e) =>
+            this.logger.error(`coordinator error: ${e?.message || e}`),
+          );
+      } else {
+        this.logger.log(`event ${shortTopic} received (id=${processedId})`);
+      }
 
-      // Đánh dấu đã xử lý
-      await this.prisma.processedEvent.create({
-        data: { id: eventId }, // có thể thêm topic/processedAt nếu schema cho phép
-      });
+      await this.prisma.processedEvent.create({ data: { id: processedId } });
     } catch (err: any) {
       this.logger.error(`consume error on ${topic}: ${err?.message || err}`);
-      // có thể emit DLQ tại đây
-    }
-  }
-
-  // Router gọn — dễ test
-  private async dispatch(shortTopic: string, evt: EventEnvelope) {
-    const data = evt.payload || {};
-
-    switch (shortTopic) {
-      case 'booking.held': {
-        // demo notify
-        const to = process.env.DEMO_NOTIFY_TO || '';
-        if (to) {
-          await this.mailer
-            .send({
-              to,
-              subject: `Booking held: ${data.bookingId}`,
-              html: `<p>Booking <b>${data.bookingId}</b> was held. Proceed to payment.</p>`,
-              category: 'booking_notifications',
-            })
-            .catch(() => {});
-        }
-        this.logger.log(`📦 booking.held bookingId=${data.bookingId}`);
-        break;
-      }
-
-      case 'booking.expired': {
-        this.logger.warn(`⏰ booking.expired bookingId=${data.bookingId}`);
-        // Promotion release khi expire (nếu muốn chạy tại consumer)
-        await this.promo
-          .releaseOnCancelOrExpire(data.bookingId, false, 'EXPIRED')
-          .catch(() => {});
-        break;
-      }
-
-      case 'booking.cancelled': {
-        await this.promo
-          .releaseOnCancelOrExpire(data.bookingId, false, 'CANCELLED')
-          .catch(() => {});
-        break;
-      }
-
-      case 'booking.refunded': {
-        await this.promo
-          .releaseOnCancelOrExpire(data.bookingId, false, 'REFUNDED')
-          .catch(() => {});
-        break;
-      }
-
-      // (tuỳ bạn có phát những event này không)
-      case 'booking.paid':
-      case 'booking.confirmed': {
-        await this.promo.confirmOnPaid(data.bookingId).catch(() => {});
-        await this.invoice.emailInvoice(data.bookingId).catch(() => {});
-        break;
-      }
-
-      default:
-        // no-op
-        break;
     }
   }
 }

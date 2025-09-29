@@ -1,4 +1,3 @@
-// src/modules/booking/bookings.service.ts
 import {
   BadRequestException,
   ConflictException,
@@ -106,7 +105,7 @@ export class BookingsService {
     try {
       const { booking, fa, wantReview } = await this.prisma.$transaction(
         async (tx) => {
-          // 1) Khóa dải ngày
+          // 1) Lock inventory days
           const avs = await tx.$queryRaw<any[]>`
             SELECT * FROM "AvailabilityDay"
             WHERE "propertyId" = ${propertyId}
@@ -126,7 +125,7 @@ export class BookingsService {
             throw new BadRequestException('Not available');
           }
 
-          // 2) Tiền
+          // 2) Pricing
           const totalPrice = avs.reduce((s, a) => s + a.price, 0);
 
           // 3) Fraud
@@ -135,7 +134,7 @@ export class BookingsService {
           const wantReview =
             !fa.skipped && (level === 'MEDIUM' || level === 'HIGH');
 
-          // 3.1) Auto-decline HIGH (nếu bật)
+          // 3.1) Auto-decline HIGH (optional)
           const autoDeclineHigh = (this.cfg as any).autoDeclineHigh ?? false;
           if (level === 'HIGH' && autoDeclineHigh) {
             const booking = await tx.booking.create({
@@ -170,14 +169,14 @@ export class BookingsService {
             await this.outbox.emitInTx(
               tx,
               'booking.auto_declined',
-              booking.id,
+              `booking.auto_declined:${booking.id}`,
               { bookingId: booking.id },
             );
 
             return { booking, fa, wantReview: false as const };
           }
 
-          // 4) Trừ kho theo id
+          // 4) Decrement inventory by id
           for (const a of avs) {
             const affected = await tx.$executeRaw`
               UPDATE "AvailabilityDay"
@@ -233,14 +232,19 @@ export class BookingsService {
           }
 
           // 7) Outbox
-          await this.outbox.emitInTx(tx, 'booking.held', booking.id, {
-            bookingId: booking.id,
-          });
+          await this.outbox.emitInTx(
+            tx,
+            'booking.held',
+            `booking.held:${booking.id}`,
+            {
+              bookingId: booking.id,
+            },
+          );
           if (wantReview) {
             await this.outbox.emitInTx(
               tx,
               'booking.review_pending',
-              booking.id,
+              `booking.review_pending:${booking.id}`,
               { bookingId: booking.id },
             );
           }
@@ -294,12 +298,21 @@ export class BookingsService {
 
       const updated = await tx.booking.update({
         where: { id: bookingId },
-        data: { status: 'CONFIRMED', reviewDeadlineAt: null },
+        data: {
+          status: 'CONFIRMED',
+          reviewDeadlineAt: null,
+          holdExpiresAt: null,
+        },
       });
 
-      await this.outbox.emitInTx(tx, 'booking.review_approved', bookingId, {
-        bookingId,
-      });
+      await this.outbox.emitInTx(
+        tx,
+        'booking.review_approved',
+        `booking.review_approved:${bookingId}`,
+        {
+          bookingId,
+        },
+      );
 
       return updated;
     });
@@ -313,7 +326,7 @@ export class BookingsService {
       if (b.status !== 'REVIEW')
         throw new BadRequestException('Booking not in REVIEW');
 
-      // Khóa tồn kho
+      // Lock inventory range
       const avs = await tx.$queryRaw<any[]>`
         SELECT *
         FROM "AvailabilityDay"
@@ -324,7 +337,7 @@ export class BookingsService {
         FOR UPDATE
       `;
 
-      // Trả kho: +1
+      // Return inventory: +1
       for (const a of avs) {
         const affected = await tx.$executeRaw`
           UPDATE "AvailabilityDay"
@@ -351,9 +364,14 @@ export class BookingsService {
         },
       });
 
-      await this.outbox.emitInTx(tx, 'booking.review_declined', bookingId, {
-        bookingId,
-      });
+      await this.outbox.emitInTx(
+        tx,
+        'booking.review_declined',
+        `booking.review_declined:${bookingId}`,
+        {
+          bookingId,
+        },
+      );
 
       return { ok: true };
     });
@@ -383,10 +401,15 @@ export class BookingsService {
         data: { cancelPolicyId, cancelPolicySnapshot: snapshot as any },
       });
 
-      await this.outbox.emitInTx(tx, 'booking.policy_attached', bookingId, {
-        bookingId,
-        cancelPolicyId,
-      });
+      await this.outbox.emitInTx(
+        tx,
+        'booking.policy_attached',
+        `booking.policy_attached:${bookingId}`,
+        {
+          bookingId,
+          cancelPolicyId,
+        },
+      );
 
       return updated;
     });
@@ -465,9 +488,14 @@ export class BookingsService {
             `;
           }
 
-          await this.outbox.emitInTx(tx, 'booking.expired', b.id, {
-            bookingId: b.id,
-          });
+          await this.outbox.emitInTx(
+            tx,
+            'booking.expired',
+            `booking.expired:${b.id}`,
+            {
+              bookingId: b.id,
+            },
+          );
         });
       }
 
@@ -511,9 +539,14 @@ export class BookingsService {
 
       const ret = await tx.booking.findUnique({ where: { id: b.id } });
 
-      await this.outbox.emitInTx(tx, 'booking.cancelled', bookingId, {
-        bookingId,
-      });
+      await this.outbox.emitInTx(
+        tx,
+        'booking.cancelled',
+        `booking.cancelled:${bookingId}`,
+        {
+          bookingId,
+        },
+      );
 
       return ret!;
     });
@@ -531,23 +564,41 @@ export class BookingsService {
         throw new BadRequestException('Not cancellable in current status');
       }
 
+      // --- Compute refund by snapshot rules (same logic as previewRefund) ---
       const snap = (b as any).cancelPolicySnapshot as {
         rules?: CancelRule[];
       } | null;
       let refundPercent = 0;
+      let refundAmount = 0;
       if (snap?.rules?.length) {
+        const checkInYmd = formatInTimeZone(b.checkIn, TZ, 'yyyy-MM-dd');
+        const checkInAtTz = fromZonedTime(`${checkInYmd} 00:00:00`, TZ);
+        const now = new Date();
+        const cancelYmd = formatInTimeZone(now, TZ, 'yyyy-MM-dd');
+        const cancelAtTz = fromZonedTime(`${cancelYmd} 00:00:00`, TZ);
+        const daysBefore = differenceInCalendarDays(checkInAtTz, cancelAtTz);
         const rulesSorted = [...snap.rules].sort(
           (a, b) => b.beforeDays - a.beforeDays,
         );
-        refundPercent = rulesSorted[0].refundPercent ?? 0; // demo
+        refundPercent = refundPercentByRules(daysBefore, rulesSorted);
+        refundAmount = Math.floor((b.totalPrice * refundPercent) / 100);
       }
-      const refundAmount = Math.floor((b.totalPrice * refundPercent) / 100);
 
-      await tx.payment.updateMany({
+      // --- Create Refund records + mark Payment REFUNDED ---
+      const pays = await tx.payment.findMany({
         where: { bookingId, status: 'SUCCEEDED' },
-        data: { status: 'REFUNDED', refundAmount },
       });
+      for (const p of pays) {
+        await tx.refund.create({
+          data: { paymentId: p.id, amount: refundAmount, status: 'SUCCEEDED' },
+        });
+        await tx.payment.update({
+          where: { id: p.id },
+          data: { status: 'REFUNDED' },
+        });
+      }
 
+      // --- Return inventory (by day ids) ---
       const avs = await tx.$queryRaw<any[]>`
         SELECT *
         FROM "AvailabilityDay"
@@ -570,9 +621,14 @@ export class BookingsService {
         data: { status: 'REFUNDED' },
       });
 
-      await this.outbox.emitInTx(tx, 'booking.refunded', bookingId, {
-        bookingId,
-      });
+      await this.outbox.emitInTx(
+        tx,
+        'booking.refunded',
+        `booking.refunded:${bookingId}`,
+        {
+          bookingId,
+        },
+      );
 
       return updated;
     });

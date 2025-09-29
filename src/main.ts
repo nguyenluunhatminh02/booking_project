@@ -6,6 +6,7 @@ import { Logger } from 'nestjs-pino';
 import { ValidationPipe } from '@nestjs/common';
 import helmet from 'helmet';
 import * as hpp from 'hpp';
+import * as bodyParser from 'body-parser';
 import * as compression from 'compression';
 // Nếu bạn dùng CsrfMiddleware ở AppModule thì KHÔNG cần import csurf ở đây
 // import * as csurf from 'csurf';
@@ -13,13 +14,21 @@ import { TransformInterceptor } from './common/transforms/transform.interceptor'
 import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
 import { ValidationException } from './common/errors/app.exception';
 import { ValidationError } from 'class-validator';
+import { ensureTopics } from './modules/kafka/ensure-topics';
 // import { CsrfExceptionFilter } from './common/filters/csrf-exception.filter'; // không bắt được EBADCSRFTOKEN
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     bufferLogs: true,
   });
+  console.log('Waiting for Kafka to be ready...');
+  await new Promise((resolve) => setTimeout(resolve, 5000));
 
+  try {
+    await ensureTopics();
+  } catch (error) {
+    console.error('Failed to ensure topics:', error);
+  }
   app.set('trust proxy', 1);
 
   // Cấu hình nguồn FE/API từ env
@@ -109,6 +118,18 @@ async function bootstrap() {
     }
     return next(err);
   });
+
+  // ❶ Stripe/MOCK webhook cần raw (không parse JSON ở route này)
+  app.use('/payments/webhook', bodyParser.raw({ type: '*/*' }));
+
+  // ❷ Các route còn lại parse JSON như bình thường, đồng thời giữ lại rawBody
+  app.use(
+    bodyParser.json({
+      verify: (req: any, _res, buf) => {
+        if (!req.rawBody) req.rawBody = buf;
+      },
+    }),
+  );
 
   app.useGlobalPipes(
     new ValidationPipe({

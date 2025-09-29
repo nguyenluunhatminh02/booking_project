@@ -1,4 +1,3 @@
-// src/modules/promotion/promotion.service.ts
 import {
   BadRequestException,
   Injectable,
@@ -133,10 +132,10 @@ export class PromotionService {
 
   /**
    * Áp mã khi HOLD/REVIEW:
-   * - Lock row promotion theo code (FOR UPDATE)
-   * - Validate hiệu lực + min rules + owner + status
-   * - Tạo redemption(RESERVED) + set discount vào booking
-   * - Ghi outbox: promotion.reserved
+   *  - Lock theo code (FOR UPDATE)
+   *  - Validate đủ điều kiện
+   *  - Tạo redemption: RESERVED + set discount vào booking
+   *  - Emit outbox
    */
   async applyOnHold(input: {
     bookingId: string;
@@ -146,7 +145,6 @@ export class PromotionService {
     const { bookingId, userId, code } = input;
 
     return this.prisma.$transaction(async (tx) => {
-      // Lock theo code để tránh race
       await tx.$queryRaw`SELECT id FROM "Promotion" WHERE code = ${code} FOR UPDATE`;
 
       const booking = await tx.booking.findUnique({
@@ -218,12 +216,17 @@ export class PromotionService {
         },
       });
 
-      await this.outbox.emitInTx(tx, 'promotion.reserved', booking.id, {
-        bookingId,
-        code: p.code,
-        promotionId: p.id,
-        amount: discount,
-      });
+      await this.outbox.emitInTx(
+        tx,
+        'promotion.reserved',
+        `promotion.reserved:${bookingId}`,
+        {
+          bookingId,
+          code: p.code,
+          promotionId: p.id,
+          amount: discount,
+        },
+      );
 
       return { discount, finalPrice: booking.totalPrice - discount, nights };
     });
@@ -231,10 +234,10 @@ export class PromotionService {
 
   /**
    * Khi thanh toán thành công:
-   * - Lock row promotion theo id
-   * - CAS usedCount theo usageLimit
-   * - APPLIED hoặc RELEASED(EXHAUSTED)
-   * - Ghi outbox tương ứng trong tx
+   *  - Lock promotion theo id
+   *  - CAS tăng usedCount (nếu có usageLimit)
+   *  - APPLIED hoặc RELEASED(EXHAUSTED)
+   *  - Emit outbox
    */
   async confirmOnPaid(bookingId: string) {
     return this.prisma.$transaction(async (tx) => {
@@ -266,13 +269,18 @@ export class PromotionService {
             data: { status: RedemptionStatus.RELEASED },
           });
 
-          await this.outbox.emitInTx(tx, 'promotion.released', bookingId, {
-            bookingId,
-            code: red.promotion.code,
-            cause: 'EXHAUSTED' as const,
-          });
+          await this.outbox.emitInTx(
+            tx,
+            'promotion.released',
+            `promotion.released:${bookingId}`,
+            {
+              bookingId,
+              code: red.promotion.code,
+              cause: 'EXHAUSTED' as const,
+            },
+          );
 
-          return { status: 'RELEASED', reason: 'EXHAUSTED' as const };
+          return { status: 'RELEASED' as const, reason: 'EXHAUSTED' as const };
         }
       } else {
         await tx.promotion.update({
@@ -286,25 +294,31 @@ export class PromotionService {
         data: { status: RedemptionStatus.APPLIED },
       });
 
-      await this.outbox.emitInTx(tx, 'promotion.applied', bookingId, {
-        bookingId,
-        code: red.promotion.code,
-        amount: red.amount,
-      });
+      await this.outbox.emitInTx(
+        tx,
+        'promotion.applied',
+        `promotion.applied:${bookingId}`,
+        { bookingId, code: red.promotion.code, amount: red.amount },
+      );
 
       return { status: 'APPLIED' as const };
     });
   }
 
   /**
-   * Khi booking CANCELLED/EXPIRED/REFUNDED → RELEASED
-   * - decreaseUsage=true hoặc cause='REFUNDED' → nếu trước đó APPLIED thì giảm usedCount
-   * - Ghi outbox: promotion.released
+   * Khi booking CANCELLED/EXPIRED/REFUNDED/… → RELEASED
+   *  - decreaseUsage=true hoặc cause='REFUNDED' → nếu APPLIED thì giảm usedCount
+   *  - Emit outbox
    */
   async releaseOnCancelOrExpire(
     bookingId: string,
     decreaseUsage = false,
-    cause?: 'CANCELLED' | 'EXPIRED' | 'REFUNDED',
+    cause?:
+      | 'CANCELLED'
+      | 'EXPIRED'
+      | 'REFUNDED'
+      | 'AUTO_DECLINED'
+      | 'REVIEW_DECLINED',
   ) {
     return this.prisma.$transaction(async (tx) => {
       const red = await tx.promotionRedemption.findUnique({
@@ -322,8 +336,8 @@ export class PromotionService {
       });
 
       if (shouldDecrease && red.status === RedemptionStatus.APPLIED) {
-        await tx.promotion.update({
-          where: { id: red.promotionId },
+        await tx.promotion.updateMany({
+          where: { id: red.promotionId, usedCount: { gt: 0 } },
           data: { usedCount: { decrement: 1 } },
         });
       }
@@ -333,12 +347,17 @@ export class PromotionService {
         data: { promoCode: null, discountAmount: 0, appliedPromotionId: null },
       });
 
-      await this.outbox.emitInTx(tx, 'promotion.released', bookingId, {
-        bookingId,
-        code: red.code,
-        cause: cause ?? 'CANCELLED',
-        decreasedUsage: shouldDecrease && red.status === 'APPLIED',
-      });
+      await this.outbox.emitInTx(
+        tx,
+        'promotion.released',
+        `promotion.released:${bookingId}`,
+        {
+          bookingId,
+          code: red.code,
+          cause: cause ?? 'CANCELLED',
+          decreasedUsage: shouldDecrease && red.status === 'APPLIED',
+        },
+      );
 
       return {
         released: true,

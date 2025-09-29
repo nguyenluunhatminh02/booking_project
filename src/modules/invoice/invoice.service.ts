@@ -13,11 +13,11 @@ import { formatInTimeZone } from 'date-fns-tz';
 import { differenceInCalendarDays } from 'date-fns';
 import { ensureFontPaths } from '../../utils/asset-path';
 import { buildSignedQrUrl } from '../../utils/qr.util';
-import { MailerService } from '../mailer/mailer.service';
 import { OutboxProducer } from '../outbox/outbox.producer';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import PdfPrinter = require('pdfmake');
+import { MailerService } from '../mailer/mailer.service';
 
 const TZ = process.env.INVOICE_TZ || 'Asia/Ho_Chi_Minh';
 const resolveAsset = (...p: string[]) =>
@@ -263,6 +263,11 @@ export class InvoiceService {
 
   async emailInvoice(bookingId: string) {
     const booking = await this.loadBooking(bookingId);
+
+    if (!booking.customer?.email) {
+      throw new Error('Customer email is missing');
+    }
+
     const { stream, filename } = await this.generatePdfStream(bookingId);
 
     const subject = `Invoice for booking ${bookingId}`;
@@ -287,11 +292,11 @@ export class InvoiceService {
       ],
     });
 
-    // ✅ Emit outbox ngoài transaction (sau khi gửi mail thành công)
+    // Emit outbox sau khi gửi mail thành công
     await this.outbox.emit(
       'invoice.emailed',
       { bookingId, to: booking.customer.email, filename },
-      bookingId, // eventKey để idempotent theo booking
+      `invoice.emailed:${bookingId}`, // namespaced event key
     );
   }
 }

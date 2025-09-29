@@ -1,12 +1,11 @@
-// src/modules/outbox/types.ts
-export type KafkaMessage = {
-  key?: string | null;
+export type KafkaMessageInput = {
+  key?: string;
   value: string;
-  headers?: Record<string, string | Buffer>;
+  headers?: Record<string, string>;
 };
 
 export interface KafkaProducerLike {
   connect(): Promise<void>;
+  send(topic: string, messages: KafkaMessageInput[]): Promise<void>;
   disconnect(): Promise<void>;
-  send(topic: string, messages: KafkaMessage[]): Promise<void>;
 }

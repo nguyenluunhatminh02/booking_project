@@ -11,7 +11,7 @@ CREATE TYPE "public"."PromotionType" AS ENUM ('PERCENT', 'FIXED');
 CREATE TYPE "public"."RiskLevel" AS ENUM ('LOW', 'MEDIUM', 'HIGH');
 
 -- CreateEnum
-CREATE TYPE "public"."FraudDecision" AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
+CREATE TYPE "public"."FraudDecision" AS ENUM ('PENDING', 'APPROVED', 'REJECTED', 'AUTO_DECLINED');
 
 -- CreateEnum
 CREATE TYPE "public"."SessionRevokeReason" AS ENUM ('USER_LOGOUT', 'ADMIN_FORCE', 'SECURITY_REUSE', 'EXPIRED', 'OTHER');
@@ -23,13 +23,61 @@ CREATE TYPE "public"."SecurityEventType" AS ENUM ('LOGIN_SUCCESS', 'LOGIN_FAILED
 CREATE TYPE "public"."UserTokenType" AS ENUM ('EMAIL_VERIFY', 'PASSWORD_RESET', 'DEVICE_APPROVAL');
 
 -- CreateEnum
+CREATE TYPE "public"."PaymentProvider" AS ENUM ('MOCK', 'STRIPE');
+
+-- CreateEnum
 CREATE TYPE "public"."PaymentStatus" AS ENUM ('PENDING', 'SUCCEEDED', 'FAILED', 'REFUNDED');
 
 -- CreateEnum
-CREATE TYPE "public"."BookingStatus" AS ENUM ('HOLD', 'PAID', 'CANCELLED', 'REFUNDED', 'REVIEW');
+CREATE TYPE "public"."RefundStatus" AS ENUM ('PENDING', 'SUCCEEDED', 'FAILED');
+
+-- CreateEnum
+CREATE TYPE "public"."BookingStatus" AS ENUM ('HOLD', 'PAID', 'CANCELLED', 'REFUNDED', 'CONFIRMED', 'REVIEW');
 
 -- CreateEnum
 CREATE TYPE "public"."RedemptionStatus" AS ENUM ('RESERVED', 'APPLIED', 'RELEASED');
+
+-- CreateEnum
+CREATE TYPE "public"."CommentEntityType" AS ENUM ('BOOKING', 'PROPERTY', 'USER', 'INVOICE', 'PROMOTION');
+
+-- CreateEnum
+CREATE TYPE "public"."CommentVisibility" AS ENUM ('PUBLIC', 'PRIVATE', 'INTERNAL');
+
+-- CreateEnum
+CREATE TYPE "public"."CommentStatus" AS ENUM ('ACTIVE', 'HIDDEN', 'DELETED');
+
+-- CreateEnum
+CREATE TYPE "public"."ReviewStatus" AS ENUM ('ACTIVE', 'HIDDEN', 'DELETED');
+
+-- CreateEnum
+CREATE TYPE "public"."MediaType" AS ENUM ('IMAGE', 'VIDEO');
+
+-- CreateEnum
+CREATE TYPE "public"."NotificationChannel" AS ENUM ('INAPP', 'EMAIL', 'BOTH');
+
+-- CreateEnum
+CREATE TYPE "public"."NotificationType" AS ENUM ('BOOKING_HELD', 'BOOKING_EXPIRED', 'BOOKING_REVIEW_APPROVED', 'BOOKING_REVIEW_DECLINED', 'BOOKING_CONFIRMED', 'BOOKING_CANCELLED', 'PAYMENT_SUCCEEDED', 'PAYMENT_FAILED', 'PAYMENT_REFUNDED', 'COMMENT_CREATED', 'COMMENT_UPDATED', 'COMMENT_DELETED', 'REVIEW_CREATED', 'REVIEW_UPDATED', 'REVIEW_DELETED');
+
+-- CreateEnum
+CREATE TYPE "public"."IdemStatus" AS ENUM ('IN_PROGRESS', 'COMPLETED', 'FAILED');
+
+-- CreateTable
+CREATE TABLE "public"."Idempotency" (
+    "id" TEXT NOT NULL,
+    "userId" TEXT,
+    "endpoint" TEXT NOT NULL,
+    "key" TEXT NOT NULL,
+    "requestHash" TEXT NOT NULL,
+    "status" "public"."IdemStatus" NOT NULL DEFAULT 'IN_PROGRESS',
+    "resourceId" TEXT,
+    "response" JSONB,
+    "error" JSONB,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+    "expiresAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "Idempotency_pkey" PRIMARY KEY ("id")
+);
 
 -- CreateTable
 CREATE TABLE "public"."users" (
@@ -51,7 +99,7 @@ CREATE TABLE "public"."user_sessions" (
     "deviceId" TEXT,
     "refreshHash" TEXT NOT NULL,
     "tokenVersion" INTEGER NOT NULL DEFAULT 0,
-    "accessVersion" INTEGER NOT NULL DEFAULT 1,
+    "accessSv" INTEGER NOT NULL DEFAULT 1,
     "expiresAt" TIMESTAMP(3) NOT NULL,
     "revokedAt" TIMESTAMP(3),
     "revokedReason" "public"."SessionRevokeReason",
@@ -173,6 +221,9 @@ CREATE TABLE "public"."Property" (
     "lat" DOUBLE PRECISION,
     "lng" DOUBLE PRECISION,
     "amenities" JSONB DEFAULT '{}'::jsonb,
+    "ratingCount" INTEGER NOT NULL DEFAULT 0,
+    "ratingAvg" DOUBLE PRECISION NOT NULL DEFAULT 0,
+    "ratingUpdatedAt" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
@@ -208,6 +259,7 @@ CREATE TABLE "public"."Booking" (
     "cancelPolicySnapshot" JSONB,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
+    "reviewDeadlineAt" TIMESTAMP(3),
 
     CONSTRAINT "Booking_pkey" PRIMARY KEY ("id")
 );
@@ -249,14 +301,40 @@ CREATE TABLE "public"."PromotionRedemption" (
 CREATE TABLE "public"."Payment" (
     "id" TEXT NOT NULL,
     "bookingId" TEXT NOT NULL,
+    "provider" "public"."PaymentProvider" NOT NULL,
     "amount" INTEGER NOT NULL,
-    "provider" TEXT NOT NULL,
+    "currency" TEXT NOT NULL DEFAULT 'VND',
     "status" "public"."PaymentStatus" NOT NULL DEFAULT 'PENDING',
-    "externalId" TEXT NOT NULL,
+    "intentId" TEXT,
+    "chargeId" TEXT,
+    "metadata" JSONB,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
     CONSTRAINT "Payment_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "public"."Refund" (
+    "id" TEXT NOT NULL,
+    "paymentId" TEXT NOT NULL,
+    "amount" INTEGER NOT NULL,
+    "status" "public"."RefundStatus" NOT NULL DEFAULT 'PENDING',
+    "providerRefundId" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "Refund_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "public"."ProcessedWebhook" (
+    "id" TEXT NOT NULL,
+    "provider" "public"."PaymentProvider" NOT NULL,
+    "raw" JSONB,
+    "at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "ProcessedWebhook_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -292,11 +370,14 @@ CREATE TABLE "public"."Promotion" (
 -- CreateTable
 CREATE TABLE "public"."Review" (
     "id" TEXT NOT NULL,
+    "bookingId" TEXT NOT NULL,
     "propertyId" TEXT NOT NULL,
-    "userId" TEXT NOT NULL,
+    "authorId" TEXT NOT NULL,
     "rating" INTEGER NOT NULL,
-    "comment" TEXT,
+    "body" TEXT,
+    "status" "public"."ReviewStatus" NOT NULL DEFAULT 'ACTIVE',
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
 
     CONSTRAINT "Review_pkey" PRIMARY KEY ("id")
 );
@@ -371,10 +452,84 @@ CREATE TABLE "public"."Outbox" (
 -- CreateTable
 CREATE TABLE "public"."ProcessedEvent" (
     "id" TEXT NOT NULL,
-    "handledAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "topic" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "ProcessedEvent_pkey" PRIMARY KEY ("id")
 );
+
+-- CreateTable
+CREATE TABLE "public"."File" (
+    "id" TEXT NOT NULL,
+    "key" TEXT NOT NULL,
+    "url" TEXT NOT NULL,
+    "bytes" INTEGER,
+    "width" INTEGER,
+    "height" INTEGER,
+    "contentType" TEXT,
+    "checksum" TEXT,
+    "tags" TEXT[],
+    "createdById" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "File_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "public"."PropertyFile" (
+    "id" TEXT NOT NULL,
+    "propertyId" TEXT NOT NULL,
+    "fileId" TEXT NOT NULL,
+    "type" "public"."MediaType" NOT NULL,
+    "sortOrder" INTEGER NOT NULL DEFAULT 0,
+    "isCover" BOOLEAN NOT NULL DEFAULT false,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "PropertyFile_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "public"."FileVariant" (
+    "id" TEXT NOT NULL,
+    "fileId" TEXT NOT NULL,
+    "kind" TEXT NOT NULL,
+    "key" TEXT NOT NULL,
+    "url" TEXT NOT NULL,
+    "width" INTEGER,
+    "height" INTEGER,
+    "bytes" INTEGER,
+    "contentType" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "FileVariant_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "public"."Notification" (
+    "id" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "type" "public"."NotificationType" NOT NULL,
+    "title" TEXT NOT NULL,
+    "body" TEXT NOT NULL,
+    "channel" "public"."NotificationChannel" NOT NULL DEFAULT 'INAPP',
+    "readAt" TIMESTAMP(3),
+    "linkUrl" TEXT,
+    "meta" JSONB,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "Notification_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateIndex
+CREATE INDEX "Idempotency_endpoint_createdAt_idx" ON "public"."Idempotency"("endpoint", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "Idempotency_expiresAt_idx" ON "public"."Idempotency"("expiresAt");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "Idempotency_userId_endpoint_key_key" ON "public"."Idempotency"("userId", "endpoint", "key");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "users_email_key" ON "public"."users"("email");
@@ -440,6 +595,9 @@ CREATE INDEX "Booking_propertyId_status_idx" ON "public"."Booking"("propertyId",
 CREATE INDEX "Booking_status_holdExpiresAt_idx" ON "public"."Booking"("status", "holdExpiresAt");
 
 -- CreateIndex
+CREATE INDEX "Booking_status_reviewDeadlineAt_idx" ON "public"."Booking"("status", "reviewDeadlineAt");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "FraudAssessment_bookingId_key" ON "public"."FraudAssessment"("bookingId");
 
 -- CreateIndex
@@ -458,10 +616,19 @@ CREATE INDEX "PromotionRedemption_promotionId_status_idx" ON "public"."Promotion
 CREATE INDEX "PromotionRedemption_userId_idx" ON "public"."PromotionRedemption"("userId");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "Payment_bookingId_key" ON "public"."Payment"("bookingId");
+CREATE INDEX "Payment_bookingId_idx" ON "public"."Payment"("bookingId");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "Payment_provider_externalId_key" ON "public"."Payment"("provider", "externalId");
+CREATE INDEX "Payment_provider_chargeId_idx" ON "public"."Payment"("provider", "chargeId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "Payment_provider_intentId_key" ON "public"."Payment"("provider", "intentId");
+
+-- CreateIndex
+CREATE INDEX "Refund_paymentId_idx" ON "public"."Refund"("paymentId");
+
+-- CreateIndex
+CREATE INDEX "ProcessedWebhook_provider_at_idx" ON "public"."ProcessedWebhook"("provider", "at");
 
 -- CreateIndex
 CREATE INDEX "Photo_propertyId_idx" ON "public"."Photo"("propertyId");
@@ -476,7 +643,16 @@ CREATE UNIQUE INDEX "Promotion_code_key" ON "public"."Promotion"("code");
 CREATE INDEX "Promotion_isActive_validFrom_validTo_idx" ON "public"."Promotion"("isActive", "validFrom", "validTo");
 
 -- CreateIndex
-CREATE INDEX "Review_propertyId_idx" ON "public"."Review"("propertyId");
+CREATE UNIQUE INDEX "Review_bookingId_key" ON "public"."Review"("bookingId");
+
+-- CreateIndex
+CREATE INDEX "Review_propertyId_createdAt_idx" ON "public"."Review"("propertyId", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "Review_authorId_createdAt_idx" ON "public"."Review"("authorId", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "Review_propertyId_status_id_idx" ON "public"."Review"("propertyId", "status", "id");
 
 -- CreateIndex
 CREATE INDEX "user_tokens_type_expiresAt_idx" ON "public"."user_tokens"("type", "expiresAt");
@@ -492,6 +668,36 @@ CREATE INDEX "backup_codes_userId_usedAt_idx" ON "public"."backup_codes"("userId
 
 -- CreateIndex
 CREATE INDEX "Outbox_topic_createdAt_idx" ON "public"."Outbox"("topic", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "ProcessedEvent_topic_createdAt_idx" ON "public"."ProcessedEvent"("topic", "createdAt");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "File_key_key" ON "public"."File"("key");
+
+-- CreateIndex
+CREATE INDEX "File_createdById_createdAt_idx" ON "public"."File"("createdById", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "PropertyFile_propertyId_sortOrder_idx" ON "public"."PropertyFile"("propertyId", "sortOrder");
+
+-- CreateIndex
+CREATE INDEX "PropertyFile_propertyId_isCover_idx" ON "public"."PropertyFile"("propertyId", "isCover");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "PropertyFile_propertyId_fileId_key" ON "public"."PropertyFile"("propertyId", "fileId");
+
+-- CreateIndex
+CREATE INDEX "FileVariant_fileId_idx" ON "public"."FileVariant"("fileId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "FileVariant_fileId_kind_key" ON "public"."FileVariant"("fileId", "kind");
+
+-- CreateIndex
+CREATE INDEX "Notification_userId_readAt_id_idx" ON "public"."Notification"("userId", "readAt", "id");
+
+-- CreateIndex
+CREATE INDEX "Notification_type_createdAt_idx" ON "public"."Notification"("type", "createdAt");
 
 -- AddForeignKey
 ALTER TABLE "public"."user_sessions" ADD CONSTRAINT "user_sessions_userId_fkey" FOREIGN KEY ("userId") REFERENCES "public"."users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
@@ -554,13 +760,19 @@ ALTER TABLE "public"."PromotionRedemption" ADD CONSTRAINT "PromotionRedemption_b
 ALTER TABLE "public"."Payment" ADD CONSTRAINT "Payment_bookingId_fkey" FOREIGN KEY ("bookingId") REFERENCES "public"."Booking"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "public"."Refund" ADD CONSTRAINT "Refund_paymentId_fkey" FOREIGN KEY ("paymentId") REFERENCES "public"."Payment"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "public"."Photo" ADD CONSTRAINT "Photo_propertyId_fkey" FOREIGN KEY ("propertyId") REFERENCES "public"."Property"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "public"."Review" ADD CONSTRAINT "Review_bookingId_fkey" FOREIGN KEY ("bookingId") REFERENCES "public"."Booking"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "public"."Review" ADD CONSTRAINT "Review_propertyId_fkey" FOREIGN KEY ("propertyId") REFERENCES "public"."Property"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "public"."Review" ADD CONSTRAINT "Review_userId_fkey" FOREIGN KEY ("userId") REFERENCES "public"."users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "public"."Review" ADD CONSTRAINT "Review_authorId_fkey" FOREIGN KEY ("authorId") REFERENCES "public"."users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "public"."user_tokens" ADD CONSTRAINT "user_tokens_userId_fkey" FOREIGN KEY ("userId") REFERENCES "public"."users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
@@ -570,3 +782,15 @@ ALTER TABLE "public"."user_mfa" ADD CONSTRAINT "user_mfa_userId_fkey" FOREIGN KE
 
 -- AddForeignKey
 ALTER TABLE "public"."backup_codes" ADD CONSTRAINT "backup_codes_userId_fkey" FOREIGN KEY ("userId") REFERENCES "public"."users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "public"."PropertyFile" ADD CONSTRAINT "PropertyFile_propertyId_fkey" FOREIGN KEY ("propertyId") REFERENCES "public"."Property"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "public"."PropertyFile" ADD CONSTRAINT "PropertyFile_fileId_fkey" FOREIGN KEY ("fileId") REFERENCES "public"."File"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "public"."FileVariant" ADD CONSTRAINT "FileVariant_fileId_fkey" FOREIGN KEY ("fileId") REFERENCES "public"."File"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "public"."Notification" ADD CONSTRAINT "Notification_userId_fkey" FOREIGN KEY ("userId") REFERENCES "public"."users"("id") ON DELETE CASCADE ON UPDATE CASCADE;

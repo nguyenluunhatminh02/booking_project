@@ -32,6 +32,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { JobsModule } from './modules/job/jobs.module';
 import { OutboxModule } from './modules/outbox/outbox.module';
 import { SagaModule } from './modules/saga/saga.module';
+import { ReviewModule } from './modules/review/review.module';
 
 @Module({
   imports: [
@@ -52,6 +53,7 @@ import { SagaModule } from './modules/saga/saga.module';
     FilesModule,
     JobsModule,
     SagaModule,
+    ReviewModule,
   ],
   controllers: [
     AppController,

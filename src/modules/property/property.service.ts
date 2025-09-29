@@ -1,21 +1,24 @@
+// src/modules/property/property.service.ts
 import {
   BadRequestException,
   ForbiddenException,
   Injectable,
   NotFoundException,
+  ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreatePropertyDto } from './dto/create-property.dto';
 import { UpdatePropertyDto } from './dto/update-property.dto';
 import { UpsertCalendarDto } from './dto/upsert-calendar.dto';
 import { GetCalendarDto } from './dto/get-calendar.dto';
+import { MediaType } from '@prisma/client';
 
+/** Force a date to UTC 00:00 (bucket per day) */
 function toUtcStartOfDay(input: string | Date): Date {
   const d = new Date(input);
   if (Number.isNaN(d.getTime())) {
     throw new BadRequestException('Invalid date: ' + String(input));
   }
-  // Force to UTC 00:00
   return new Date(
     Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()),
   );
@@ -73,22 +76,70 @@ export class PropertyService {
         skip,
         take,
         orderBy: { createdAt: 'desc' },
+        include: {
+          // lấy cover nhanh (nếu có)
+          mediaLinks: {
+            where: { type: MediaType.IMAGE, isCover: true },
+            take: 1,
+            include: { file: true },
+          },
+        },
       }),
       this.prisma.property.count({ where: { hostId } }),
     ]);
-    return { items, total, skip, take };
+
+    const itemsWithCover = items.map((p) => {
+      const cover = p.mediaLinks[0]?.file
+        ? {
+            url: p.mediaLinks[0].file.url,
+            width: p.mediaLinks[0].file.width,
+            height: p.mediaLinks[0].file.height,
+          }
+        : null;
+      // bỏ mediaLinks nặng nề khỏi list
+      const { mediaLinks, ...rest } = p as any;
+      return { ...rest, cover };
+    });
+
+    return { items: itemsWithCover, total, skip, take };
   }
 
   async getMyPropertyById(hostId: string, id: string) {
     await this.assertOwnership(hostId, id);
-    return this.prisma.property.findUnique({
+
+    const prop = await this.prisma.property.findUnique({
       where: { id },
       include: {
-        photos: true,
+        // Đúng với schema: mediaLinks (bảng nối) + file thật
+        mediaLinks: {
+          where: { type: MediaType.IMAGE },
+          orderBy: [
+            { isCover: 'desc' },
+            { sortOrder: 'asc' },
+            { createdAt: 'asc' },
+          ],
+          include: { file: true },
+        },
         // Nên phân trang reviews ở endpoint riêng nếu dữ liệu lớn
         reviews: true,
       },
     });
+    if (!prop) throw new NotFoundException('Property not found');
+
+    // Map ra photos cho FE dùng dễ, nhưng vẫn giữ nguyên mediaLinks nếu cần
+    const photos = prop.mediaLinks.map((m) => ({
+      propertyFileId: m.id,
+      fileId: m.fileId,
+      url: m.file.url,
+      width: m.file.width,
+      height: m.file.height,
+      isCover: m.isCover,
+      sortOrder: m.sortOrder,
+      createdAt: m.createdAt,
+    }));
+
+    const { mediaLinks, ...rest } = prop as any;
+    return { ...rest, photos, mediaLinks }; // trả cả hai tuỳ FE chọn dùng
   }
 
   async updateProperty(hostId: string, id: string, dto: UpdatePropertyDto) {
@@ -104,6 +155,114 @@ export class PropertyService {
         amenities: dto.amenities ?? undefined,
       },
     });
+  }
+
+  // ----------------- Property photos helpers -----------------
+  /** Gắn 1 ảnh (File) vào Property (bảng nối PropertyFile). */
+  async addPhoto(
+    hostId: string,
+    propertyId: string,
+    fileId: string,
+    opts?: { isCover?: boolean; sortOrder?: number },
+  ) {
+    await this.assertOwnership(hostId, propertyId);
+
+    // validate file tồn tại (tuỳ chọn)
+    const f = await this.prisma.file.findUnique({ where: { id: fileId } });
+    if (!f) throw new NotFoundException('File not found');
+
+    // tạo link (unique [propertyId, fileId])
+    const link = await this.prisma.propertyFile.create({
+      data: {
+        propertyId,
+        fileId,
+        type: MediaType.IMAGE,
+        isCover: !!opts?.isCover,
+        sortOrder: opts?.sortOrder ?? 0,
+      },
+      include: { file: true },
+    });
+
+    // đảm bảo duy nhất cover
+    if (opts?.isCover) {
+      await this.prisma.propertyFile.updateMany({
+        where: { propertyId, id: { not: link.id } },
+        data: { isCover: false },
+      });
+    }
+
+    return link;
+  }
+
+  /** Gỡ 1 ảnh khỏi Property (không xoá File gốc). */
+  async removePhoto(hostId: string, propertyFileId: string) {
+    // kiểm tra ownership qua join
+    const link = await this.prisma.propertyFile.findUnique({
+      where: { id: propertyFileId },
+      include: { property: { select: { hostId: true } } },
+    });
+    if (!link) throw new NotFoundException('Media link not found');
+    if (link.property.hostId !== hostId) throw new ForbiddenException();
+
+    await this.prisma.propertyFile.delete({ where: { id: propertyFileId } });
+    return { ok: true };
+  }
+
+  /** Đặt một ảnh làm cover duy nhất. */
+  async setCover(hostId: string, propertyId: string, propertyFileId: string) {
+    await this.assertOwnership(hostId, propertyId);
+
+    return this.prisma.$transaction(async (tx) => {
+      const link = await tx.propertyFile.findUnique({
+        where: { id: propertyFileId },
+      });
+      if (!link || link.propertyId !== propertyId) {
+        throw new BadRequestException('Invalid media link');
+      }
+      await tx.propertyFile.updateMany({
+        where: { propertyId },
+        data: { isCover: false },
+      });
+      const updated = await tx.propertyFile.update({
+        where: { id: propertyFileId },
+        data: { isCover: true },
+        include: { file: true },
+      });
+      return updated;
+    });
+  }
+
+  /** Sắp xếp lại thứ tự ảnh (sortOrder) theo danh sách. */
+  async reorderPhotos(
+    hostId: string,
+    propertyId: string,
+    orders: Array<{ propertyFileId: string; sortOrder: number }>,
+  ) {
+    await this.assertOwnership(hostId, propertyId);
+    if (!Array.isArray(orders) || !orders.length) {
+      throw new BadRequestException('orders required');
+    }
+
+    // (tuỳ chọn) đảm bảo tất cả propertyFileId thuộc property này
+    const ids = orders.map((o) => o.propertyFileId);
+    const owns = await this.prisma.propertyFile.count({
+      where: { id: { in: ids }, propertyId },
+    });
+    if (owns !== orders.length) {
+      throw new ForbiddenException(
+        'One or more photos do not belong to property',
+      );
+    }
+
+    await this.prisma.$transaction(
+      orders.map((o) =>
+        this.prisma.propertyFile.update({
+          where: { id: o.propertyFileId },
+          data: { sortOrder: o.sortOrder },
+        }),
+      ),
+    );
+    return { ok: true };
   }
 
   // ----------------- Availability (calendar) -----------------

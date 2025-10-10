@@ -22,7 +22,18 @@ services:
       interval: 5s
       timeout: 3s
       retries: 30
-
+  meilisearch:
+    image: getmeili/meilisearch:v1.7
+    ports:
+      - "7700:7700"
+    environment:
+      MEILI_ENV: development
+      MEILI_MASTER_KEY: masterKey
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:7700/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
     ports: ["8080:8080"]

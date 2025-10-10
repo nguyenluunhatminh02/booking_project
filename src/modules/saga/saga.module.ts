@@ -5,7 +5,7 @@ import { InvoiceService } from '../invoice/invoice.service';
 import { MailerService } from '../mailer/mailer.service';
 import { OutboxModule } from '../outbox/outbox.module';
 import { SagaCoordinator } from './saga.coordinator';
-import { EventsConsumerService } from './events-consumer.service';
+import { EventsConsumerService } from '../events/events-consumer.service';
 import { ThumbnailService } from '../file/thumbnail.service';
 import { AntivirusService } from '../file/antivirus.service';
 import { MinioService } from '../file/minio.service';

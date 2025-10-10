@@ -112,6 +112,8 @@ export class EventsConsumerService implements OnModuleInit, OnModuleDestroy {
       new Set(TOPICS_RAW.map((t) => topicName(TOPIC_PREFIX, t))),
     );
 
+    console.log('TopicsFinal: ', topicsFinal);
+
     this.logger.log(`Topics to subscribe: ${topicsFinal.join(', ')}`);
     if (!this.kafka) {
       throw new Error('Kafka instance is not initialized');

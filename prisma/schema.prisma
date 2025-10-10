@@ -67,11 +67,6 @@ enum UserTokenType {
   DEVICE_APPROVAL 
 }
 
-enum MediaType {
-  IMAGE
-  VIDEO
-}
-
 enum MalwareScanStatus {
   PENDING
   CLEAN
@@ -149,6 +144,12 @@ model User {
   FraudAssessment FraudAssessment[]
   reviewsAuthored Review[]         @relation("ReviewAuthor") // <— đặt tên rõ ràng
 
+  notiPreference NotiPreference[]
+  notification Notification[]
+  conversationParticipant ConversationParticipant[]
+  message Message[]
+  blocker UserBlock[] @relation("Blocker")
+  blockee UserBlock[] @relation("Blockee")
   @@map("users")
 }
 
@@ -335,6 +336,7 @@ model Property {
 
   mediaLinks   PropertyFile[]
   @@index([hostId])
+  Conversation Conversation[]
 }
 
 model AvailabilityDay {
@@ -469,6 +471,7 @@ model File {
   variants      FileVariant[]
 
   @@index([createdById, createdAt])
+  MessageAttachment MessageAttachment[]
 }
 
 model PropertyFile {
@@ -692,4 +695,175 @@ model ProcessedWebhook {
   at        DateTime         @default(now())
 
   @@index([provider, at])
+}
+
+// ============ Notifications ============
+enum NotiChannel {
+  INAPP
+  EMAIL
+  PUSH
+  WEBHOOK
+}
+
+enum NotiStatus {
+  PENDING
+  SENT
+  FAILED
+  CANCELLED
+  READ
+}
+
+model Notification {
+  id           String      @id @default(uuid())
+  userId       String
+  key          String                      // ví dụ: 'review_reminder', 'booking_updated'
+  channel      NotiChannel
+  title        String?
+  body         String?
+  data         Json?
+  dedupeKey    String?                     // tránh gửi trùng một sự kiện
+  status       NotiStatus   @default(PENDING)
+  deliverAfter DateTime?                   // nếu set → scheduler bắn sau thời điểm này
+  sentAt       DateTime?
+  readAt       DateTime?
+
+  // Lock + retry (safe multi-instance)
+  processingAt DateTime?
+  attempts     Int         @default(0)
+  lastError    String?
+
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  user         User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([status, deliverAfter, channel, processingAt])
+  @@index([userId, channel, readAt, createdAt])
+
+  // Postgres cho phép nhiều NULL => chỉ unique khi có dedupeKey
+  @@unique([channel, userId, dedupeKey])
+}
+
+model NotiPreference {
+  id        String   @id @default(uuid())
+  userId    String
+  key       String                  // theo noti key, ví dụ: 'review_reminder'
+  email     Boolean  @default(true)
+  push      Boolean  @default(true)
+  inapp     Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, key])
+}
+
+
+// ====== (Append) Chat / Inbox schema ======
+
+// Nếu schema của bạn CHƯA có enum này thì thêm (nếu có rồi thì bỏ qua)
+enum MediaType {
+  IMAGE
+  VIDEO
+}
+
+enum ConversationType {
+  DIRECT
+  PROPERTY
+}
+
+model Conversation {
+  id          String                 @id @default(uuid())
+  type        ConversationType
+  key         String?                @unique   // ví dụ: "DIRECT:<u1>:<u2>" | "PROPERTY:<propertyId>:<guestId>"
+  propertyId  String?
+  createdAt   DateTime               @default(now())
+  updatedAt   DateTime               @updatedAt
+
+  property    Property?              @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  participants ConversationParticipant[]
+  messages    Message[]
+
+  @@index([propertyId])
+  @@map("conversations")
+}
+
+model ConversationParticipant {
+  id             String      @id @default(uuid())
+  conversationId String
+  userId         String
+
+  role           String?
+  archivedAt     DateTime?
+  mutedUntil     DateTime?
+  pinnedAt       DateTime?
+  lastReadAt     DateTime?     // dùng tính unread
+
+  // snapshot hồ sơ người dùng để render nhanh (name/avatar/role…)
+  profileSnapshot Json?
+
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, userId])
+  @@index([userId, pinnedAt])
+  @@index([userId, archivedAt])
+  @@index([conversationId, userId, lastReadAt])
+  @@map("conversation_participants")
+}
+
+model Message {
+  id             String        @id @default(uuid())
+  conversationId String
+  senderId       String
+  body           String?                        // media-only OK
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  deletedAt      DateTime?
+
+  conversation   Conversation   @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender         User           @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  attachments    MessageAttachment[]
+
+  @@index([conversationId, createdAt])
+  @@index([senderId, createdAt])
+  @@index([conversationId, createdAt, senderId])
+  @@map("messages")
+}
+
+model MessageAttachment {
+  id           String     @id @default(uuid())
+  messageId    String
+  fileId       String
+  mediaType    MediaType
+  url          String?
+  bytes        Int?
+  width        Int?
+  height       Int?
+  contentType  String?
+  createdAt    DateTime   @default(now())
+
+  message      Message    @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  file         File       @relation(fields: [fileId], references: [id], onDelete: Restrict)
+
+  @@index([messageId])
+  @@index([fileId])
+  @@map("message_attachments")
+}
+
+// ===== Block list (1 chiều) =====
+model UserBlock {
+  id             String   @id @default(uuid())
+  userId         String   // blocker
+  blockedUserId  String   // blockee
+  createdAt      DateTime @default(now())
+
+  blocker   User @relation("Blocker", fields: [userId], references: [id], onDelete: Cascade)
+  blockee   User @relation("Blockee", fields: [blockedUserId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, blockedUserId])
+  @@index([blockedUserId])
+  @@map("user_blocks")
 }

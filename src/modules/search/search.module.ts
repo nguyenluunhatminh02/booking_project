@@ -3,12 +3,12 @@ import { PrismaService } from '../../prisma/prisma.service';
 
 // Controllers
 import { SearchController } from './search.controller';
-import { SearchAdminController } from './indexer/search.admin.controller';
+import { SearchAdminController } from './search.admin.controller';
 
 // Services
 import { SearchService } from './search.service';
-import { SearchIndexerService } from './indexer/search.indexer.service';
-import { SearchConsumer } from './indexer/search.consumer';
+import { SearchIndexerService } from './search.indexer.service';
+import { SearchConsumer } from './search.consumer';
 
 // Adapters
 import { MeiliSearchAdapter } from './adapters/meili.adapter';

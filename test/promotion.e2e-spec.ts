@@ -60,7 +60,7 @@ describe('Promotion E2E', () => {
   });
 
   it('GET /promotions/preview -> no side effects', async () => {
-    const r = await request(app.getHttpServer())
+    const _result = await request(app.getHttpServer())
       .get(`/promotions/preview?bookingId=bkE2E&code=WELCOME10`)
       .expect(200);
 
@@ -70,7 +70,7 @@ describe('Promotion E2E', () => {
   });
 
   it('POST /promotions/apply-on-hold -> RESERVED & set discount on booking', async () => {
-    const r = await request(app.getHttpServer())
+    const _result = await request(app.getHttpServer())
       .post('/promotions/apply-on-hold')
       .send({ bookingId: 'bkE2E', userId, code: 'WELCOME10' })
       .expect(201);
@@ -83,7 +83,7 @@ describe('Promotion E2E', () => {
   });
 
   it('POST /promotions/confirm-on-paid -> APPLIED', async () => {
-    const r = await request(app.getHttpServer())
+    const _result = await request(app.getHttpServer())
       .post('/promotions/confirm-on-paid')
       .send({ bookingId: 'bkE2E' })
       .expect(201);

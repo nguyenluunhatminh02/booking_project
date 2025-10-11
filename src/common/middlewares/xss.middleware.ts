@@ -1,7 +1,21 @@
 // src/common/middlewares/xss.middleware.ts
 import { Injectable, NestMiddleware } from '@nestjs/common';
-import { Request, Response, NextFunction } from 'express';
-import { filterXSS } from 'xss'; // ⬅️ thay vì import xss from 'xss'
+import { NextFunction, Request, Response } from 'express';
+import { filterXSS } from 'xss';
+
+type Sanitizable =
+  | string
+  | number
+  | boolean
+  | null
+  | undefined
+  | SanitizableObject
+  | Sanitizable[];
+type SanitizableObject = { [key: string]: Sanitizable };
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
 
 @Injectable()
 export class XssMiddleware implements NestMiddleware {
@@ -12,45 +26,54 @@ export class XssMiddleware implements NestMiddleware {
   };
 
   use(req: Request, _res: Response, next: NextFunction) {
-    const ct = (req.headers['content-type'] || '').toLowerCase();
+    const contentType = (req.headers['content-type'] || '').toLowerCase();
     const isUpload =
-      ct.includes('multipart/form-data') || ct.includes('octet-stream');
+      contentType.includes('multipart/form-data') ||
+      contentType.includes('octet-stream');
     if (isUpload) return next();
 
     if (req.body && typeof req.body === 'object') {
       req.body = this.cloneSanitize(req.body);
     }
-    if (req.query) this.sanitizeInPlace(req.query as any);
-    if (req.params) this.sanitizeInPlace(req.params as any);
+    if (req.query) this.sanitizeInPlace(req.query as Record<string, unknown>);
+    if (req.params) this.sanitizeInPlace(req.params as Record<string, unknown>);
 
     next();
   }
 
-  private cloneSanitize(val: any): any {
-    if (Array.isArray(val)) return val.map((v) => this.cloneSanitize(v));
-    if (val && typeof val === 'object') {
-      const out: any = {};
-      for (const [k, v] of Object.entries(val)) out[k] = this.cloneSanitize(v);
-      return out;
+  private cloneSanitize<T extends Sanitizable>(value: T): T {
+    if (Array.isArray(value)) {
+      return value.map((item) => this.cloneSanitize(item)) as T;
     }
-    if (typeof val === 'string') return filterXSS(val, this.options); // ⬅️
-    return val;
+
+    if (isObject(value)) {
+      const result: Record<string, Sanitizable> = {};
+      for (const [key, val] of Object.entries(value)) {
+        result[key] = this.cloneSanitize(val as Sanitizable);
+      }
+      return result as T;
+    }
+
+    if (typeof value === 'string') {
+      return filterXSS(value, this.options) as T;
+    }
+
+    return value;
   }
 
-  private sanitizeInPlace(obj: any) {
-    if (!obj || typeof obj !== 'object') return;
-    for (const key of Object.keys(obj)) {
-      const v = obj[key];
-      if (typeof v === 'string') {
-        obj[key] = filterXSS(v, this.options); // ⬅️
-      } else if (Array.isArray(v)) {
-        obj[key] = v.map((item) =>
+  private sanitizeInPlace(target: Record<string, unknown>) {
+    for (const key of Object.keys(target)) {
+      const value = target[key];
+      if (typeof value === 'string') {
+        target[key] = filterXSS(value, this.options);
+      } else if (Array.isArray(value)) {
+        target[key] = value.map((item) =>
           typeof item === 'string'
-            ? filterXSS(item, this.options) // ⬅️
-            : this.cloneSanitize(item),
+            ? filterXSS(item, this.options)
+            : this.cloneSanitize(item as Sanitizable),
         );
-      } else if (v && typeof v === 'object') {
-        this.sanitizeInPlace(v);
+      } else if (isObject(value)) {
+        this.sanitizeInPlace(value);
       }
     }
   }

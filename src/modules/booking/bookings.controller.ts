@@ -5,7 +5,6 @@ import {
   Get,
   Headers,
   Param,
-  ParseBoolPipe,
   Post,
   Query,
 } from '@nestjs/common';
@@ -195,7 +194,7 @@ export class BookingsController {
     @Param('bookingId') bookingId: string,
     @Body() body: CancelPaidOrConfirmedDto,
   ) {
-    return (this.bookings as any).cancelPaidOrConfirmed(body.userId, bookingId);
+    return this.bookings.cancelPaidOrConfirmed(body.userId, bookingId);
   }
 
   // ========================= DEV ENDPOINTS =========================

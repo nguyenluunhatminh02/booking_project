@@ -124,12 +124,13 @@ export class TokenBucketService implements OnModuleInit {
     }
     const cost = Math.max(1, opts.cost ?? 1);
 
-    // TTL mặc định: gấp 2 thời gian để nạp đầy bucket
+    // TTL mặc định: gấp 2 thời gian để nạp đầy bucket (ms -> s)
     const timeToFullMs = capacity / (refillTokens / refillIntervalMs);
-    const ttlSec = Math.max(
-      1,
-      Math.floor((opts.ttlSec ?? 2 * timeToFullMs) / 1000),
-    );
+    const defaultTtlSec = Math.max(1, Math.floor((2 * timeToFullMs) / 1000));
+    const ttlSec =
+      opts.ttlSec !== undefined
+        ? Math.max(1, Math.floor(opts.ttlSec))
+        : defaultTtlSec;
 
     const key = `${NS}:${bucketKey}`;
     const nowMs = Date.now();

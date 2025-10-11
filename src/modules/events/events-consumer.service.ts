@@ -112,8 +112,6 @@ export class EventsConsumerService implements OnModuleInit, OnModuleDestroy {
       new Set(TOPICS_RAW.map((t) => topicName(TOPIC_PREFIX, t))),
     );
 
-    console.log('TopicsFinal: ', topicsFinal);
-
     this.logger.log(`Topics to subscribe: ${topicsFinal.join(', ')}`);
     if (!this.kafka) {
       throw new Error('Kafka instance is not initialized');
@@ -128,14 +126,36 @@ export class EventsConsumerService implements OnModuleInit, OnModuleDestroy {
       await admin.disconnect();
 
       if (missing.length) {
-        this.logger.error(`Missing topics: ${missing.join(', ')}`);
-        throw new Error(`Kafka topics missing: ${missing.join(', ')}`);
+        const requireAll = process.env.KAFKA_STRICT_TOPICS === '1';
+        const msg = `Missing topics: ${missing.join(', ')}`;
+        if (requireAll) {
+          this.logger.error(msg);
+          throw new Error(msg);
+        }
+
+        this.logger.warn(`${msg}. Will skip these topics.`);
       }
 
-      this.logger.log(`All topics verified: ${topicsFinal.join(', ')}`);
+      const available = topicsFinal.filter((t) => known.has(t));
+      if (!available.length) {
+        this.logger.warn(
+          'No existing topics to subscribe. Consumer will stay idle until topics are created.',
+        );
+      }
+
+      this.logger.log(
+        `Topics verified (existing): ${available.length ? available.join(', ') : 'none'}`,
+      );
+      await this.startConsumer(available);
     } catch (error) {
       await admin.disconnect();
       throw error;
+    }
+  }
+
+  private async startConsumer(topics: string[]) {
+    if (!this.kafka) {
+      throw new Error('Kafka instance is not initialized');
     }
 
     this.consumer = this.kafka.consumer({
@@ -156,15 +176,32 @@ export class EventsConsumerService implements OnModuleInit, OnModuleDestroy {
     await this.consumer.connect();
     this.logger.log('Consumer connected successfully');
 
+    if (topics.length === 0) {
+      this.logger.warn('No topics to subscribe; skipping consumer run.');
+      await this.consumer.disconnect();
+      this.consumer = undefined;
+      return;
+    }
+
     // Subscribe theo danh sách đã chuẩn hoá
-    for (const t of topicsFinal) {
+    for (const t of topics) {
       await this.consumer.subscribe({ topic: t, fromBeginning: false });
       this.logger.log(`Subscribed to topic: ${t}`);
     }
 
     await this.consumer.run({
-      autoCommit: true,
-      eachMessage: (p) => this.handleMessage(p),
+      autoCommit: false,
+      eachMessage: async (payload) => {
+        try {
+          await this.processMessage(payload);
+          await this.commitOffset(payload);
+        } catch (error) {
+          this.logger.error(
+            `consume error on ${payload.topic}: ${error?.message || error}`,
+          );
+          throw error;
+        }
+      },
     });
 
     this.logger.log(
@@ -191,47 +228,50 @@ export class EventsConsumerService implements OnModuleInit, OnModuleDestroy {
     return undefined;
   }
 
-  private async handleMessage({
+  private async processMessage({
     topic,
     partition,
     message,
   }: EachMessagePayload) {
-    try {
-      const text = message.value?.toString('utf8') || '{}';
-      const evt = JSON.parse(text) as {
-        id?: string;
-        topic?: string;
-        payload: any;
-        v?: number;
-      };
+    const text = message.value?.toString('utf8') || '{}';
+    const evt = JSON.parse(text) as {
+      id?: string;
+      topic?: string;
+      payload: any;
+      v?: number;
+    };
 
-      const headerId = this.getHeaderString(message.headers?.['x-event-id']);
-      const processedId = headerId || `${topic}:${partition}:${message.offset}`;
+    const headerId = this.getHeaderString(message.headers?.['x-event-id']);
+    const processedId = headerId || `${topic}:${partition}:${message.offset}`;
 
-      const existed = await this.prisma.processedEvent.findUnique({
-        where: { id: processedId },
+    const existed = await this.prisma.processedEvent.findUnique({
+      where: { id: processedId },
+    });
+    if (existed) return;
+
+    const shortTopic = (evt.topic || topic).replace(TOPIC_PREFIX, '');
+
+    if (this.coordinator) {
+      await this.coordinator.handle({
+        topic: shortTopic,
+        payload: evt.payload,
+        key: message.key?.toString() ?? null,
       });
-      if (existed) return;
-
-      const shortTopic = (evt.topic || topic).replace(TOPIC_PREFIX, '');
-
-      if (this.coordinator) {
-        await this.coordinator
-          .handle({
-            topic: shortTopic,
-            payload: evt.payload,
-            key: message.key?.toString() ?? null,
-          })
-          .catch((e) =>
-            this.logger.error(`coordinator error: ${e?.message || e}`),
-          );
-      } else {
-        this.logger.log(`event ${shortTopic} received (id=${processedId})`);
-      }
-
-      await this.prisma.processedEvent.create({ data: { id: processedId } });
-    } catch (err: any) {
-      this.logger.error(`consume error on ${topic}: ${err?.message || err}`);
+    } else {
+      this.logger.log(`event ${shortTopic} received (id=${processedId})`);
     }
+
+    await this.prisma.processedEvent.create({ data: { id: processedId } });
+  }
+
+  private async commitOffset({
+    topic,
+    partition,
+    message,
+  }: EachMessagePayload) {
+    if (!this.consumer) return;
+    const current = BigInt(message.offset);
+    const next = (current + 1n).toString();
+    await this.consumer.commitOffsets([{ topic, partition, offset: next }]);
   }
 }

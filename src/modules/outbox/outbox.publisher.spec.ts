@@ -1,4 +1,9 @@
-import { OutboxPublisher } from './outbox.publisher';
+﻿import { OutboxPublisher } from './outbox.publisher';
+import {
+  AppConfigService,
+  KafkaConfig,
+  OutboxConfig,
+} from '../../config/app-config.service';
 
 type Row = {
   id: string;
@@ -18,63 +23,86 @@ function row(partial: Partial<Row>): Row {
   };
 }
 
-describe('OutboxPublisher (unit)', () => {
-  const prisma: any = {
-    outbox: {
-      findMany: jest.fn(),
+function createConfigStub(overrides?: {
+  kafka?: Partial<KafkaConfig>;
+  outbox?: Partial<OutboxConfig>;
+}): AppConfigService {
+  const kafka: KafkaConfig = {
+    topicPrefix: 'dev.',
+    brokers: [],
+    clientId: 'test-client',
+    ssl: false,
+    sasl: undefined,
+    admin: {
+      eventTopics: [],
+      numPartitions: 1,
+      replicationFactor: 1,
     },
-    $transaction: jest.fn(), // không dùng ở phiên bản publisher hiện tại
-    outbox_deleteMany: jest.fn(), // helper để theo dõi call
+    ...overrides?.kafka,
   };
 
-  const redis: any = {
-    set: jest.fn(),
-    del: jest.fn(),
+  const outbox: OutboxConfig = {
+    kafkaEnabled: false,
+    autostart: false,
+    pollIntervalSec: 1,
+    batchSize: 200,
+    lockTtlSec: 10,
+    ...overrides?.outbox,
   };
 
-  const producer = {
-    connect: jest.fn().mockResolvedValue(undefined),
-    disconnect: jest.fn().mockResolvedValue(undefined),
-    send: jest.fn().mockResolvedValue(undefined),
-  };
+  return {
+    kafka,
+    outbox,
+  } as unknown as AppConfigService;
+}
 
-  // khởi tạo publisher bằng cách "giả" DI thủ công
-  let publisher: OutboxPublisher;
+const prisma: any = {
+  outbox: {
+    findMany: jest.fn(),
+    deleteMany: jest.fn(),
+  },
+  $transaction: jest.fn(),
+};
 
+const redis: any = {
+  set: jest.fn(),
+  del: jest.fn(),
+};
+
+const producer = {
+  connect: jest.fn().mockResolvedValue(undefined),
+  disconnect: jest.fn().mockResolvedValue(undefined),
+  send: jest.fn().mockResolvedValue(undefined),
+};
+
+let publisher: OutboxPublisher;
+
+describe('OutboxPublisher (unit)', () => {
   beforeEach(async () => {
     jest.resetAllMocks();
-    // ENV: không autostart để tránh timer
-    process.env.OUTBOX_AUTOSTART = '0';
-    process.env.OUTBOX_POLL_SEC = '1';
-    process.env.OUTBOX_BATCH = '200';
-    process.env.KAFKA_TOPIC_PREFIX = 'dev.';
-
-    // mock prisma.deleteMany vì publisher gọi trực tiếp (không qua $transaction)
     prisma.outbox.deleteMany = jest.fn().mockResolvedValue({ count: 0 });
-
-    // Redis lock: cho phép acquire
     redis.set.mockResolvedValue(true);
     redis.del.mockResolvedValue(1);
 
-    // build instance
-    publisher = new OutboxPublisher(prisma, redis, producer as any);
+    const config = createConfigStub();
+    publisher = new OutboxPublisher(prisma, redis, producer as any, config);
 
-    await publisher.onModuleInit(); // gọi connect()
+    await publisher.onModuleInit();
   });
 
   afterEach(async () => {
     await publisher.onModuleDestroy();
   });
 
-  it('skip khi không acquire được Redis lock', async () => {
+  it('skip khi khÃ´ng acquire Ä‘Æ°á»£c Redis lock', async () => {
     redis.set.mockResolvedValueOnce(false);
     await publisher.tick();
 
     expect(producer.send).not.toHaveBeenCalled();
-    expect(redis.del).not.toHaveBeenCalled(); // chưa acquire ⇒ không del
+    expect(redis.del).not.toHaveBeenCalled();
   });
 
-  it('group theo topic và gửi headers + envelope chuẩn, sau đó deleteMany', async () => {
+  it('group theo topic vÃ  gá»­i headers + envelope chuáº©n, sau Ä‘Ã³ deleteMany', async () => {
     const rows: Row[] = [
       row({
         id: 'e1',
@@ -100,17 +128,14 @@ describe('OutboxPublisher (unit)', () => {
 
     await publisher.tick();
 
-    // gửi 2 lần (2 topic khác nhau, có prefix 'dev.')
     expect(producer.send).toHaveBeenCalledTimes(2);
 
-    // Lần 1: dev.booking.events (không chắc thứ tự map, kiểm theo tham số)
     const calls = producer.send.mock.calls;
     const topics = calls.map(([t]: [string, any]) => t).sort();
     expect(topics).toEqual(
       ['dev.booking.events', 'dev.inventory.events'].sort(),
     );
 
-    // Kiểm 1 call cụ thể
     const callBooking = calls.find(
       ([t]: [string, any]) => t === 'dev.booking.events',
     )!;
@@ -132,33 +157,29 @@ describe('OutboxPublisher (unit)', () => {
     expect(bookingMsgs[0].headers['x-topic']).toBe('dev.booking.events');
     expect(bookingMsgs[0].headers['x-schema-ver']).toBe('1');
 
-    // Đã xoá các row
     expect(prisma.outbox.deleteMany).toHaveBeenCalledTimes(1);
     const ids = (prisma.outbox.deleteMany as jest.Mock).mock.calls[0][0].where
       .id.in;
     expect(ids.sort()).toEqual(['e1', 'e2', 'e3'].sort());
 
-    // Unlock đã được gọi
     expect(redis.del).toHaveBeenCalledWith('job:outbox:publish');
   });
 
-  it('unlock khi producer.send ném lỗi', async () => {
+  it('unlock khi producer.send nÃ©m lá»—i', async () => {
     prisma.outbox.findMany.mockResolvedValueOnce([row({ id: 'ee' })]);
     producer.send.mockRejectedValueOnce(new Error('send fail'));
 
     await publisher.tick();
 
-    // vẫn acquire + del
     expect(redis.set).toHaveBeenCalled();
     expect(redis.del).toHaveBeenCalledWith('job:outbox:publish');
   });
 
-  it('không làm gì nếu không có rows', async () => {
+  it('khÃ´ng lÃ m gÃ¬ náº¿u khÃ´ng cÃ³ rows', async () => {
     prisma.outbox.findMany.mockResolvedValueOnce([]);
     await publisher.tick();
 
     expect(producer.send).not.toHaveBeenCalled();
-    // vẫn acquire + del lock
     expect(redis.set).toHaveBeenCalled();
     expect(redis.del).toHaveBeenCalledWith('job:outbox:publish');
   });

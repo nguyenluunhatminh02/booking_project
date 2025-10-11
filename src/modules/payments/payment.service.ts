@@ -8,7 +8,7 @@ import {
 import { PrismaService } from '../../prisma/prisma.service';
 import { IdempotencyService } from '../idempotency/idempotency.service';
 import { OutboxProducer } from '../outbox/outbox.producer';
-import { Prisma, PaymentProvider } from '@prisma/client';
+import { PaymentProvider } from '@prisma/client';
 import { CreateIntentDto } from './dto/create-intent.dto';
 import { RefundDto } from './dto/refund.dto';
 import { PaymentProviderAdapter } from './providers/provider.adapter';
@@ -16,8 +16,6 @@ import { MockProviderAdapter } from './providers/mock.adapter';
 import { StripeLikeHmacAdapter } from './providers/stripelike.adapter';
 import { VnpayAdapter } from './providers/vnpay.adapter';
 import { safeReturnUrl } from 'src/utils/url-guard';
-
-type Tx = Prisma.TransactionClient;
 
 function pickProvider(name?: string): PaymentProvider {
   const n = (name || process.env.PAYMENT_PROVIDER || 'MOCK').toUpperCase();
@@ -282,7 +280,7 @@ export class PaymentService {
           data: {
             id: `${provider}:${evt.eventId}`,
             provider,
-            raw: evt.raw as any,
+            raw: evt.raw,
           },
         });
       } catch (e: any) {
@@ -390,7 +388,7 @@ export class PaymentService {
           data: {
             id: `${evt.provider}:${evt.eventId}`,
             provider: 'VNPAY',
-            raw: evt.raw as any,
+            raw: evt.raw,
           },
         });
       } catch (e: any) {

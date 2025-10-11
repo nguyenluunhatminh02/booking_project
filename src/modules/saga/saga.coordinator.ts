@@ -76,12 +76,12 @@ export class SagaCoordinator {
     this.logger.warn(`🚫 booking.auto_declined bookingId=${bookingId}`);
   }
 
-  private async onBookingHeld({ bookingId }: any) {
+  private onBookingHeld({ bookingId }: any) {
     if (!bookingId) return;
     this.logger.log(`📦 booking.held bookingId=${bookingId}`);
   }
 
-  private async onBookingReviewPending({ bookingId }: any) {
+  private onBookingReviewPending({ bookingId }: any) {
     if (!bookingId) return;
     this.logger.log(`🕵️ booking.review_pending bookingId=${bookingId}`);
   }
@@ -127,12 +127,12 @@ export class SagaCoordinator {
     await this.invoice?.emailInvoice(bookingId).catch(() => {});
   }
 
-  private async onBookingConfirmed({ bookingId }: any) {
+  private onBookingConfirmed({ bookingId }: any) {
     if (!bookingId) return;
     this.logger.log(`🎉 booking.confirmed bookingId=${bookingId}`);
   }
 
-  private async onBookingPolicyAttached({ bookingId, cancelPolicyId }: any) {
+  private onBookingPolicyAttached({ bookingId, cancelPolicyId }: any) {
     if (!bookingId || !cancelPolicyId) return;
     this.logger.log(
       `📎 booking.policy_attached bookingId=${bookingId} policy=${cancelPolicyId}`,

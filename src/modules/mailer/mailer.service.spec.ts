@@ -104,7 +104,7 @@ describe('MailerService', () => {
     const stream = Readable.from(Buffer.from('STREAM_DATA'));
 
     await svc.send({
-      to: 'x@example.com',
+      to: 'kronnosss2002@gmail.com',
       subject: 'Hello',
       html: '<p>Hi</p>',
       headers: { 'X-Test': '1' },

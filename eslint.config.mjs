@@ -29,7 +29,11 @@ export default tseslint.config(
     rules: {
       '@typescript-eslint/no-explicit-any': 'off',
       '@typescript-eslint/no-floating-promises': 'warn',
-      '@typescript-eslint/no-unsafe-argument': 'warn',
+      '@typescript-eslint/no-unsafe-argument': 'off',
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        { argsIgnorePattern: '^_', ignoreRestSiblings: true },
+      ],
       "prettier/prettier": [
         "error",
         {
@@ -40,6 +44,20 @@ export default tseslint.config(
       '@typescript-eslint/no-unsafe-return': 'off',
       '@typescript-eslint/no-unsafe-member-access': 'off',
       '@typescript-eslint/no-unsafe-call': 'off'
+    },
+  },
+  {
+    files: [
+      'test/**/*.ts',
+      'src/**/*.spec.ts',
+      'src/**/*.e2e-spec.ts',
+    ],
+    rules: {
+      '@typescript-eslint/require-await': 'off',
+      '@typescript-eslint/no-unsafe-argument': 'off',
+      '@typescript-eslint/ban-ts-comment': 'off',
+      'no-irregular-whitespace': 'off',
+      '@typescript-eslint/no-unused-vars': 'off',
     },
   },
 );

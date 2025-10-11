@@ -4,6 +4,8 @@ export type KafkaMessageInput = {
   headers?: Record<string, string>;
 };
 
+export type KafkaMessage = KafkaMessageInput;
+
 export interface KafkaProducerLike {
   connect(): Promise<void>;
   send(topic: string, messages: KafkaMessageInput[]): Promise<void>;

@@ -153,12 +153,14 @@ export class MinioService implements OnModuleInit {
         if (total >= SNIFF_BYTES) {
           try {
             (stream as any).destroy?.();
-          } catch {}
+          } catch (destroyErr) {
+            void destroyErr;
+          }
           break;
         }
       }
-    } catch {
-      /* ignore */
+    } catch (streamErr) {
+      void streamErr;
     }
     const buf = Buffer.concat(chunks, Math.min(total, SNIFF_BYTES));
     const ft = await fileTypeFromBuffer(buf).catch(() => undefined);

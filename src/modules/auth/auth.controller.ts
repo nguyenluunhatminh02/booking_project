@@ -1,4 +1,4 @@
-// src/auth/auth.controller.ts
+﻿// src/auth/auth.controller.ts
 import {
   BadRequestException,
   Body,
@@ -26,7 +26,6 @@ import {
 } from 'class-validator';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './guards/jwt.guard';
-import { CurrentUserId } from 'src/common/decorators/current-user.decorator';
 import { REFRESH_COOKIE_NAME, refreshCookieOptions } from './cookie-options';
 import { Public } from 'src/common/decorators/public.decorator';
 import {
@@ -79,13 +78,7 @@ class LoginDto {
 
   @IsOptional()
   @IsString()
-  deviceFp?: string; // FE gửi fingerprint hash
-}
-
-class LogoutAllDto {
-  @IsOptional()
-  @IsString()
-  keepSessionId?: string;
+  deviceFp?: string; // FE gá»­i fingerprint hash
 }
 
 class RevokeAccessDto {
@@ -109,7 +102,8 @@ export class AuthController {
 
   private excludeRefreshToken<T extends { refreshToken: string }>(data: T) {
     // Remove refreshToken from response body
-    const { refreshToken: _, ...rest } = data;
+    const { refreshToken, ...rest } = data;
+    void refreshToken;
     return rest;
   }
 
@@ -120,7 +114,12 @@ export class AuthController {
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const result = await this.auth.register(dto.email, dto.password, req.ctx);
+    const requestContext = (req as Request & { ctx?: unknown }).ctx;
+    const result = await this.auth.register(
+      dto.email,
+      dto.password,
+      requestContext,
+    );
     this.setRefreshTokenCookie(res, result.refreshToken);
     return this.excludeRefreshToken(result);
   }
@@ -136,11 +135,12 @@ export class AuthController {
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
+    const requestContext = (req as Request & { ctx?: unknown }).ctx;
     const out = await this.auth.login(
       dto.email,
       dto.password,
       dto.deviceId,
-      req.ctx,
+      requestContext,
     );
     this.setRefreshTokenCookie(res, out.refreshToken);
     return this.excludeRefreshToken(out);
@@ -158,7 +158,7 @@ export class AuthController {
     const allow = (url?: string) => {
       if (!url) return false;
       try {
-        const u = new URL(url);
+        new URL(url);
         return REDIRECT_WHITELIST.some((p) => url.startsWith(p));
       } catch {
         return false;
@@ -168,20 +168,20 @@ export class AuthController {
     try {
       await this.das.approve(token);
 
-      // Ưu tiên redirect tùy chọn (nếu nằm trong whitelist)
-      if (allow(redirect)) return res.redirect(redirect as string);
-      // Nếu có FE_* trong .env thì redirect
+      // Æ¯u tiÃªn redirect tÃ¹y chá»n (náº¿u náº±m trong whitelist)
+      if (redirect && allow(redirect)) return res.redirect(redirect);
+      // Náº¿u cÃ³ FE_* trong .env thÃ¬ redirect
       if (FE_OK_REDIRECT) return res.redirect(FE_OK_REDIRECT);
-      // Fallback: trả HTML tối giản
+      // Fallback: tráº£ HTML tá»‘i giáº£n
       return res.status(200).type('html').send(successHtml());
     } catch {
-      if (allow(redirect)) return res.redirect(redirect as string);
+      if (redirect && allow(redirect)) return res.redirect(redirect);
       if (FE_ERR_REDIRECT) return res.redirect(FE_ERR_REDIRECT);
       return res.status(400).type('html').send(errorHtml());
     }
   }
 
-  /** POST /auth/approve-device { token } (tuỳ chọn: gọi API trực tiếp) */
+  /** POST /auth/approve-device { token } (tuá»³ chá»n: gá»i API trá»±c tiáº¿p) */
   @Public()
   @Post('approve-device')
   @HttpCode(200)
@@ -197,7 +197,8 @@ export class AuthController {
   ) {
     const rt = req.cookies?.[REFRESH_COOKIE_NAME];
     if (!rt) throw new UnauthorizedException('Missing refresh token');
-    const out = await this.auth.refresh(rt, req.ctx);
+    const requestContext = (req as Request & { ctx?: unknown }).ctx;
+    const out = await this.auth.refresh(rt, requestContext);
     if (!out) throw new UnauthorizedException('Invalid refresh token');
     if (out?.refreshToken) {
       this.setRefreshTokenCookie(res, out.refreshToken);
@@ -206,8 +207,6 @@ export class AuthController {
   }
 
   @Post('logout')
-  @RequirePermissions(P.User.update)
-  @Resource(R.Property.params('id'))
   @HttpCode(HttpStatus.OK)
   async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const rt = req.cookies?.[REFRESH_COOKIE_NAME];
@@ -224,7 +223,7 @@ export class AuthController {
   @HttpCode(200)
   async logoutOthers(@Req() req: any) {
     const userId: string = req.user?.sub;
-    const keepSid: string | undefined = req.user?.sid; // sid đã nhúng trong AT của bạn
+    const keepSid: string | undefined = req.user?.sid; // sid Ä‘Ã£ nhÃºng trong AT cá»§a báº¡n
     const out = await this.auth.logoutAll(userId, keepSid);
     return { ok: true, revoked: out.revoked };
   }
@@ -253,7 +252,7 @@ function successHtml() {
 <style>body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;padding:24px;color:#111}</style>
 </head>
 <body>
-  <h2>✅ Device approved</h2>
+  <h2>âœ… Device approved</h2>
   <p>You can close this tab now.</p>
   <script>setTimeout(()=>{ try{window.close()}catch(e){} },3000)</script>
 </body>
@@ -267,7 +266,7 @@ function errorHtml() {
 <style>body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;padding:24px;color:#111}</style>
 </head>
 <body>
-  <h2>❌ Invalid or expired token</h2>
+  <h2>âŒ Invalid or expired token</h2>
   <p>Please request a new approval link.</p>
 </body>
 </html>`;

@@ -1,50 +1,34 @@
 import { Kafka, logLevel } from 'kafkajs';
 import { topicName } from './topicName';
+import { KafkaConfig } from '../../config/app-config.service';
 
-function list(name: string, fallback: string[] = []) {
-  const raw = process.env[name];
-  if (!raw) return fallback;
-  return raw
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-function num(name: string, d: number) {
-  const v = Number(process.env[name]);
-  return Number.isFinite(v) && v > 0 ? v : d;
-}
-function brokers() {
-  return (process.env.KAFKA_BROKERS ?? 'localhost:9094')
-    .split(',')
-    .map((s) => s.trim());
-}
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-export async function ensureTopics() {
+export async function ensureTopics(config: KafkaConfig) {
+  if (!config.brokers.length) {
+    console.warn(
+      '[Kafka] Skipping topic ensure because no brokers configured.',
+    );
+    return [];
+  }
   const kafka = new Kafka({
-    clientId: process.env.KAFKA_CLIENT_ID ?? 'booking-admin',
-    brokers: brokers(),
+    clientId: `${config.clientId || 'booking-api'}-admin`,
+    brokers: config.brokers,
+    ssl: config.ssl || undefined,
+    sasl: config.sasl as any,
     logLevel: logLevel.INFO,
   });
   const admin = kafka.admin();
   await admin.connect();
 
   try {
-    const prefix = process.env.KAFKA_TOPIC_PREFIX ?? '';
-    const base = list('EVENT_TOPICS', [
-      // defaults nếu thiếu ENV
-      'booking.held',
-      'booking.expired',
-      'booking.cancelled',
-      'booking.refunded',
-      'booking.paid',
-      'booking.confirmed',
-    ]);
+    const prefix = config.topicPrefix ?? '';
+    const base = config.admin.eventTopics;
 
     // Ghép prefix 1 lần, tránh double-prefix
     const topics = Array.from(new Set(base.map((t) => topicName(prefix, t))));
-    const desiredPartitions = num('KAFKA_NUM_PARTITIONS', 3);
-    const replicationFactor = num('KAFKA_REPLICATION_FACTOR', 1);
+    const desiredPartitions = config.admin.numPartitions;
+    const replicationFactor = config.admin.replicationFactor;
 
     // 1) Tạo nếu thiếu
     const existing = new Set(await admin.listTopics());

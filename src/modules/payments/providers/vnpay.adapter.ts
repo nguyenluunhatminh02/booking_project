@@ -49,7 +49,7 @@ export class VnpayAdapter implements PaymentProviderAdapter {
     return { tmnCode, hashSecret, payUrl, version, currCode, locale };
   }
 
-  async createIntent(p: {
+  createIntent(p: {
     amount: number;
     currency: string;
     returnUrl?: string | null;
@@ -86,25 +86,29 @@ export class VnpayAdapter implements PaymentProviderAdapter {
       .digest('hex');
     const redirectUrl = `${payUrl}?${signData}&vnp_SecureHash=${vnp_SecureHash}`;
 
-    return { intentId: txnRef, clientSecret: null, redirectUrl };
+    return Promise.resolve({
+      intentId: txnRef,
+      clientSecret: null,
+      redirectUrl,
+    });
   }
 
   // Khớp interface, nhưng chưa hỗ trợ refund — ném lỗi
-  async createRefund(_p: {
+  createRefund(_p: {
     chargeId: string;
     amount: number;
   }): Promise<{ refundId: string }> {
-    throw new Error('refund_not_supported_for_vnpay');
+    return Promise.reject(new Error('refund_not_supported_for_vnpay'));
   }
 
-  async verifyAndNormalizeWebhook(
+  verifyAndNormalizeWebhook(
     _headers: Record<string, any>,
     _rawBody: string,
   ): Promise<NormalizedWebhook> {
-    throw new Error('unsupported_for_vnpay');
+    return Promise.reject(new Error('unsupported_for_vnpay'));
   }
 
-  async verifyAndNormalizeIpn(
+  verifyAndNormalizeIpn(
     paramsIn: Record<string, string | string[]>,
   ): Promise<NormalizedWebhook> {
     const { hashSecret, currCode } = this.cfg();
@@ -132,7 +136,7 @@ export class VnpayAdapter implements PaymentProviderAdapter {
 
     const eventId = `${params['vnp_TxnRef']}:${params['vnp_PayDate'] || Date.now()}`;
 
-    return {
+    return Promise.resolve({
       eventId,
       type: ok ? 'payment_succeeded' : 'payment_failed',
       provider: 'VNPAY',
@@ -142,6 +146,6 @@ export class VnpayAdapter implements PaymentProviderAdapter {
       currency: params['vnp_CurrCode'] || currCode,
       raw: params,
       paymentIdHint: null,
-    };
+    });
   }
 }

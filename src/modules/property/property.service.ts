@@ -4,7 +4,6 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
-  ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreatePropertyDto } from './dto/create-property.dto';
@@ -89,11 +88,15 @@ export class PropertyService {
     ]);
 
     const itemsWithCover = items.map((p) => {
-      const cover = p.mediaLinks[0]?.file
+      const mediaLinksRaw = Array.isArray((p as any).mediaLinks)
+        ? (p as any).mediaLinks
+        : [];
+      const coverLink = mediaLinksRaw[0];
+      const cover = coverLink?.file
         ? {
-            url: p.mediaLinks[0].file.url,
-            width: p.mediaLinks[0].file.width,
-            height: p.mediaLinks[0].file.height,
+            url: coverLink.file.url,
+            width: coverLink.file.width,
+            height: coverLink.file.height,
           }
         : null;
       // bỏ mediaLinks nặng nề khỏi list

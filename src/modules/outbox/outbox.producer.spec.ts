@@ -1,4 +1,37 @@
 import { OutboxProducer } from './outbox.producer';
+import { topicName } from '../kafka/topicName';
+import {
+  AppConfigService,
+  KafkaConfig,
+  OutboxConfig,
+} from '../../config/app-config.service';
+
+function createConfigStub(prefix: string): AppConfigService {
+  const kafka: KafkaConfig = {
+    topicPrefix: prefix,
+    brokers: [],
+    clientId: 'test-client',
+    ssl: false,
+    sasl: undefined,
+    admin: {
+      eventTopics: [],
+      numPartitions: 1,
+      replicationFactor: 1,
+    },
+  };
+  const outbox: OutboxConfig = {
+    kafkaEnabled: false,
+    autostart: false,
+    pollIntervalSec: 5,
+    batchSize: 200,
+    lockTtlSec: 10,
+  };
+
+  return {
+    kafka,
+    outbox,
+  } as unknown as AppConfigService;
+}
 
 describe('OutboxProducer', () => {
   const prisma: any = {
@@ -12,13 +45,14 @@ describe('OutboxProducer', () => {
   });
 
   it('emit() → ghi 1 row outbox với topic/payload/eventKey', async () => {
-    const svc = new OutboxProducer(prisma);
+    const config = createConfigStub('dev.');
+    const svc = new OutboxProducer(prisma, config);
     await svc.emit('booking.events', { foo: 1 }, 'bk_123');
 
     expect(prisma.outbox.create).toHaveBeenCalledTimes(1);
     expect(prisma.outbox.create).toHaveBeenCalledWith({
       data: {
-        topic: 'booking.events',
+        topic: topicName('dev.', 'booking.events'),
         payload: { foo: 1 },
         eventKey: 'bk_123',
       },
@@ -26,7 +60,8 @@ describe('OutboxProducer', () => {
   });
 
   it('emitInTx() → dùng tx (TransactionClient) để ghi', async () => {
-    const svc = new OutboxProducer(prisma);
+    const config = createConfigStub('dev.');
+    const svc = new OutboxProducer(prisma, config);
     const tx = {
       outbox: {
         create: jest.fn(),
@@ -38,7 +73,7 @@ describe('OutboxProducer', () => {
     expect(tx.outbox.create).toHaveBeenCalledTimes(1);
     expect(tx.outbox.create).toHaveBeenCalledWith({
       data: {
-        topic: 'booking.events',
+        topic: topicName('dev.', 'booking.events'),
         eventKey: 'bk_999',
         payload: { bar: 2 },
       },

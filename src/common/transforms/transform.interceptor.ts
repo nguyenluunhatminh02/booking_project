@@ -198,7 +198,7 @@ export class TransformInterceptor<T>
     };
   }
 
-  private sanitizeData(data: any): any {
+  private sanitizeData(data: unknown): unknown {
     if (this.options.skipSanitization) {
       return data;
     }
@@ -206,7 +206,7 @@ export class TransformInterceptor<T>
     return this.deepCleanObject(data, new WeakSet());
   }
 
-  private deepCleanObject(obj: any, seen: WeakSet<object>): any {
+  private deepCleanObject(obj: unknown, seen: WeakSet<object>): unknown {
     // Handle primitives
     if (obj == null || typeof obj !== 'object') {
       return obj;
@@ -230,9 +230,9 @@ export class TransformInterceptor<T>
     // Mark as seen for circular reference detection
     seen.add(obj);
 
-    const cleaned: any = {};
+    const cleaned: Record<string, unknown> = {};
 
-    for (const [key, value] of Object.entries(obj)) {
+    for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
       // Skip sensitive fields
       if (this.isSensitiveField(key)) {
         continue;
@@ -262,7 +262,7 @@ export class TransformInterceptor<T>
     );
   }
 
-  private isEmptyValue(value: any): boolean {
+  private isEmptyValue(value: unknown): boolean {
     if (value == null) return true;
     if (Array.isArray(value)) return value.length === 0;
     if (typeof value === 'object') return Object.keys(value).length === 0;

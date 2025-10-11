@@ -13,6 +13,14 @@ jest.mock(
 );
 
 // --- Env cho e2e: tắt autostart publisher & Kafka thật ---
+const originalEnv = {
+  NODE_ENV: process.env.NODE_ENV,
+  OUTBOX_AUTOSTART: process.env.OUTBOX_AUTOSTART,
+  KAFKA_BROKERS: process.env.KAFKA_BROKERS,
+  KAFKAJS_NO_PARTITIONER_WARNING: process.env.KAFKAJS_NO_PARTITIONER_WARNING,
+  CSRF_ENABLED: process.env.CSRF_ENABLED,
+};
+
 process.env.NODE_ENV = 'test';
 process.env.OUTBOX_AUTOSTART = '0'; // publisher không tự chạy interval
 process.env.KAFKA_BROKERS = ''; // ép OutboxModule xài console/fake (không kết nối Kafka)
@@ -127,6 +135,20 @@ describe('Outbox + Booking (e2e)', () => {
   afterAll(async () => {
     await app.close();
     await prisma.$disconnect(); // đảm bảo đóng pool Prisma
+
+    const restore = (key: keyof typeof originalEnv) => {
+      const value = originalEnv[key];
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    };
+    restore('NODE_ENV');
+    restore('OUTBOX_AUTOSTART');
+    restore('KAFKA_BROKERS');
+    restore('KAFKAJS_NO_PARTITIONER_WARNING');
+    restore('CSRF_ENABLED');
   });
 
   it('POST /bookings/hold → ghi Outbox booking.held → tick() publish & xoá', async () => {
@@ -144,9 +166,9 @@ describe('Outbox + Booking (e2e)', () => {
       .set('X-User-Id', 'u1')
       .send({
         items: [
-          { date: '2025-12-01', price: 1_000_000, remaining: 1, capacity: 1 },
-          { date: '2025-12-02', price: 1_200_000, remaining: 1, capacity: 1 },
-          { date: '2025-12-03', price: 1_500_000, remaining: 1, capacity: 1 },
+          { date: '2025-12-01', price: 1_000_000, remaining: 1 },
+          { date: '2025-12-02', price: 1_200_000, remaining: 1 },
+          { date: '2025-12-03', price: 1_500_000, remaining: 1 },
         ],
       })
       .expect(201);

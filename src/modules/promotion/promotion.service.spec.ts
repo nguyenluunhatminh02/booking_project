@@ -7,11 +7,15 @@ import {
 describe('PromotionService (unit)', () => {
   let prisma: MockPrismaPromotion;
   let svc: PromotionService;
+  let outbox: { emitInTx: jest.Mock };
 
   const userId = 'u1';
 
   beforeEach(async () => {
     prisma = new MockPrismaPromotion();
+    outbox = {
+      emitInTx: jest.fn().mockResolvedValue(undefined),
+    };
     // seed 2 bookings HOLD
     await prisma.booking.create({
       data: {
@@ -34,7 +38,7 @@ describe('PromotionService (unit)', () => {
       },
     } as any);
 
-    svc = new PromotionService(prisma as any);
+    svc = new PromotionService(prisma as any, outbox as any);
   });
 
   it('preview: % discount đúng và không side-effects', async () => {

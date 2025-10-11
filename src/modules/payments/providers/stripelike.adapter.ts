@@ -12,30 +12,34 @@ export class StripeLikeHmacAdapter implements PaymentProviderAdapter {
     return 'STRIPE' as const;
   }
 
-  async createIntent(_p: {
+  createIntent(_p: {
     amount: number;
     currency: string;
     returnUrl?: string | null;
     metadata?: Record<string, any>;
   }) {
     const id = `pi_${Math.random().toString(36).slice(2)}`;
-    return { intentId: id, clientSecret: `cs_${id}` };
+    return Promise.resolve({ intentId: id, clientSecret: `cs_${id}` });
   }
 
-  async createRefund(_p: { chargeId: string; amount: number }) {
+  createRefund(_p: { chargeId: string; amount: number }) {
     const id = `re_${Math.random().toString(36).slice(2)}`;
-    return { refundId: id };
+    return Promise.resolve({ refundId: id });
   }
 
-  async verifyAndNormalizeWebhook(
+  verifyAndNormalizeWebhook(
     headers: Record<string, any>,
     rawBody: string,
   ): Promise<NormalizedWebhook> {
     const secret = process.env.STRIPE_WEBHOOK_SECRET || '';
-    if (!secret) throw new Error('STRIPE_WEBHOOK_SECRET not set');
+    if (!secret) {
+      return Promise.reject(new Error('STRIPE_WEBHOOK_SECRET not set'));
+    }
 
     const sig = headerVal(headers, 'stripe-signature');
-    if (!sig) throw new Error('Missing Stripe-Signature');
+    if (!sig) {
+      return Promise.reject(new Error('Missing Stripe-Signature'));
+    }
 
     const parts = Object.fromEntries(
       String(sig)
@@ -44,11 +48,15 @@ export class StripeLikeHmacAdapter implements PaymentProviderAdapter {
     );
     const t = parts['t'];
     const v1 = parts['v1'];
-    if (!t || !v1) throw new Error('Invalid Stripe-Signature format');
+    if (!t || !v1) {
+      return Promise.reject(new Error('Invalid Stripe-Signature format'));
+    }
 
     const payload = `${t}.${rawBody}`;
     const calc = createHmac('sha256', secret).update(payload).digest('hex');
-    if (calc !== v1) throw new Error('Invalid signature');
+    if (calc !== v1) {
+      return Promise.reject(new Error('Invalid signature'));
+    }
 
     const evt = JSON.parse(rawBody || '{}');
 
@@ -88,7 +96,7 @@ export class StripeLikeHmacAdapter implements PaymentProviderAdapter {
         break;
     }
 
-    return {
+    const result: NormalizedWebhook = {
       eventId: String(evt.id || `${evt.type}:${evt.created}`),
       type,
       provider: 'STRIPE',
@@ -99,5 +107,7 @@ export class StripeLikeHmacAdapter implements PaymentProviderAdapter {
       raw: evt,
       paymentIdHint: null,
     };
+
+    return Promise.resolve(result);
   }
 }

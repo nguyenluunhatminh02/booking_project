@@ -73,6 +73,33 @@ class FakeOutbox {
   }
 }
 
+class FakeConfig {
+  private _bookingHoldMinutes = 10;
+  private _reviewHoldDays = 1;
+  private _autoDeclineHighRisk = false;
+
+  get bookingHoldMinutes() {
+    return this._bookingHoldMinutes;
+  }
+  set bookingHoldMinutes(value: number) {
+    this._bookingHoldMinutes = value;
+  }
+
+  get reviewHoldDays() {
+    return this._reviewHoldDays;
+  }
+  set reviewHoldDays(value: number) {
+    this._reviewHoldDays = value;
+  }
+
+  get autoDeclineHighRisk() {
+    return this._autoDeclineHighRisk;
+  }
+  set autoDeclineHighRisk(value: boolean) {
+    this._autoDeclineHighRisk = value;
+  }
+}
+
 // ─────────── helpers ───────────
 function day(y: number, m: number, d: number) {
   return new Date(Date.UTC(y, m - 1, d, 0, 0, 0));
@@ -159,6 +186,7 @@ describe('BookingsService (wantReview + refund)', () => {
   let fraud: FakeFraud;
   let idem: FakeIdem;
   let svc: BookingsService;
+  let config: FakeConfig;
 
   const userId = 'u1';
   let propertyId: string;
@@ -170,6 +198,7 @@ describe('BookingsService (wantReview + refund)', () => {
     fraud = new FakeFraud();
     idem = new FakeIdem();
     const outbox = new FakeOutbox(prisma); // ← inject outbox mock
+    config = new FakeConfig();
 
     // @ts-ignore
     svc = new BookingsService(
@@ -177,14 +206,8 @@ describe('BookingsService (wantReview + refund)', () => {
       fraud as any,
       idem as any,
       outbox as any,
+      config as any,
     );
-
-    // patch config để test ổn định
-    (svc as any).cfg = {
-      holdMinutes: 10,
-      autoDeclineHigh: false,
-      reviewHoldDaysDefault: 1,
-    };
 
     // seed property + 3 ngày (2 phòng/ngày)
     const prop = await prisma.property.create({
@@ -213,7 +236,7 @@ describe('BookingsService (wantReview + refund)', () => {
 
   it('MEDIUM: holdExpiresAt = now + reviewHoldDaysDefault & reviewDeadlineAt khớp', async () => {
     fraud.mode = 'MEDIUM';
-    (svc as any).cfg.reviewHoldDaysDefault = 2;
+    config.reviewHoldDays = 2;
     const t0 = new Date();
 
     const r = await svc.hold(
@@ -236,7 +259,7 @@ describe('BookingsService (wantReview + refund)', () => {
 
   it('LOW: holdExpiresAt = now + holdMinutes', async () => {
     fraud.mode = 'LOW';
-    (svc as any).cfg.holdMinutes = 10;
+    config.bookingHoldMinutes = 10;
     const t0 = new Date();
 
     const r = await svc.hold(
@@ -299,7 +322,7 @@ describe('BookingsService (wantReview + refund)', () => {
 
   it('HIGH + autoDeclineHigh=true → CANCELLED, inventory không bị trừ, chỉ outbox auto_declined', async () => {
     fraud.mode = 'HIGH';
-    (svc as any).cfg.autoDeclineHigh = true;
+    config.autoDeclineHighRisk = true;
 
     const res = await svc.hold(
       userId,

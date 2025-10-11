@@ -1,10 +1,10 @@
 // src/modules/invoice/invoice.service.spec.ts
-import { PassThrough } from 'stream';
 import { Test } from '@nestjs/testing';
 import { NotFoundException } from '@nestjs/common';
 import { InvoiceService } from './invoice.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MailerService } from '../mailer/mailer.service';
+import { OutboxProducer } from '../outbox/outbox.producer';
 
 describe('InvoiceService (unit)', () => {
   let svc: InvoiceService;
@@ -12,6 +12,7 @@ describe('InvoiceService (unit)', () => {
     booking: { findUnique: jest.Mock };
   };
   let mailer: { send: jest.Mock };
+  let outbox: { emit: jest.Mock };
 
   const bookingOk = {
     id: 'bk_123',
@@ -33,12 +34,16 @@ describe('InvoiceService (unit)', () => {
     mailer = {
       send: jest.fn().mockResolvedValue({ queued: true }),
     };
+    outbox = {
+      emit: jest.fn().mockResolvedValue(undefined),
+    };
 
     const modRef = await Test.createTestingModule({
       providers: [
         InvoiceService,
         { provide: PrismaService, useValue: prisma },
         { provide: MailerService, useValue: mailer },
+        { provide: OutboxProducer, useValue: outbox },
       ],
     }).compile();
 
@@ -81,6 +86,15 @@ describe('InvoiceService (unit)', () => {
     // content là Readable stream
     expect(typeof att?.content?.on).toBe('function');
     expect(att?.contentType).toBe('application/pdf');
+    expect(outbox.emit).toHaveBeenCalledWith(
+      'invoice.emailed',
+      {
+        bookingId: 'bk_123',
+        to: 'alice@example.com',
+        filename: 'invoice-bk_123.pdf',
+      },
+      'invoice.emailed:bk_123',
+    );
   });
 
   it('throws NotFound when booking missing', async () => {

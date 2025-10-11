@@ -74,61 +74,47 @@ export class AuditInterceptor implements NestInterceptor {
 
     return next.handle().pipe(
       tap((result) => {
-        // Move async logic to an IIFE to avoid returning a Promise
-        (async () => {
-          try {
-            // Cho phép resolveId động từ kết quả
-            if (
-              spec &&
-              'resolveId' in spec &&
-              typeof spec.resolveId === 'function'
-            ) {
-              entityId = spec.resolveId(req, res, result) ?? entityId;
-            }
+        const resolvedId =
+          spec && 'resolveId' in spec && typeof spec.resolveId === 'function'
+            ? (spec.resolveId(req, res, result) ?? entityId)
+            : entityId;
 
-            const durationMs = Date.now() - start;
-            const status = res.statusCode ?? 200;
+        const durationMs = Date.now() - start;
+        const status = res.statusCode ?? 200;
 
-            await this.audit.log({
-              actorId,
-              action,
-              entity,
-              entityId,
-              meta: { ...baseMeta, status, ok: true, durationMs },
-              ctx: { ip, ua },
-            });
-          } catch {
-            /* best-effort */
-          }
-        })();
+        void this.audit
+          .log({
+            actorId,
+            action,
+            entity,
+            entityId: resolvedId,
+            meta: { ...baseMeta, status, ok: true, durationMs },
+            ctx: { ip, ua },
+          })
+          .catch(() => undefined);
       }),
       catchError((err) => {
-        // log thất bại
-        (async () => {
-          try {
-            const durationMs = Date.now() - start;
-            const status = err?.status ?? res.statusCode ?? 500;
-            await this.audit.log({
-              actorId,
-              action,
-              entity,
-              entityId,
-              meta: {
-                ...baseMeta,
-                status,
-                ok: false,
-                durationMs,
-                error: {
-                  name: err?.name,
-                  message: err?.message,
-                },
+        const durationMs = Date.now() - start;
+        const status = err?.status ?? res.statusCode ?? 500;
+        void this.audit
+          .log({
+            actorId,
+            action,
+            entity,
+            entityId,
+            meta: {
+              ...baseMeta,
+              status,
+              ok: false,
+              durationMs,
+              error: {
+                name: err?.name,
+                message: err?.message,
               },
-              ctx: { ip, ua },
-            });
-          } catch {
-            /* best-effort */
-          }
-        })();
+            },
+            ctx: { ip, ua },
+          })
+          .catch(() => undefined);
         return throwError(() => err);
       }),
     );

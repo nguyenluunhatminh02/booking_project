@@ -1,11 +1,22 @@
-// src/config/env.validation.ts
 import { z } from 'zod';
 
+const boolLike = z
+  .union([z.string(), z.boolean(), z.number()])
+  .transform((value) => {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'number') return value !== 0;
+    const normalized = value.toString().trim().toLowerCase();
+    if (['1', 'true', 'yes', 'y'].includes(normalized)) return true;
+    if (['0', 'false', 'no', 'n'].includes(normalized)) return false;
+    return undefined;
+  })
+  .optional();
+
 /**
- * Validate raw env vars. Không dùng zod.url() cho DATABASE_URL vì
- * PostgreSQL URI không phải http/https.
+ * Validate raw environment variables. Do not use zod.url() for DATABASE_URL
+ * because PostgreSQL URIs do not conform to http/https.
  */
-const RawEnvSchema = z.object({
+export const RawEnvSchema = z.object({
   NODE_ENV: z
     .enum(['development', 'test', 'production'])
     .default('development'),
@@ -14,51 +25,46 @@ const RawEnvSchema = z.object({
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
   SHADOW_DATABASE_URL: z.string().min(1).optional(),
 
-  // Timezone để bucket lịch/booking
+  // Inventory / booking
   INVENTORY_TZ: z.string().default('Asia/Ho_Chi_Minh'),
-
-  // Thời gian giữ HOLD (phút)
   HOLD_MINUTES: z.coerce.number().int().min(1).max(180).default(15),
-
-  // --- MỚI: cấu hình cho wantReview ---
-  // Tự động từ chối nếu risk HIGH (không trừ kho), phát outbox booking.auto_declined
-  AUTO_DECLINE_HIGH: z.coerce.boolean().default(false),
-
-  // Số ngày tiếp tục giữ HOLD sau khi reviewer APPROVE (đặt deadline)
+  AUTO_DECLINE_HIGH: boolLike,
   REVIEW_HOLD_DAYS: z.coerce.number().int().min(1).max(14).default(1),
 
-  // (Tuỳ chọn) bật/tắt fraud mặc định qua flag hệ thống
-  // FRAUD_CHECK_DEFAULT: z.coerce.boolean().default(true),
+  // Web security
+  CORS_ORIGINS: z.string().default('http://localhost:5173'),
+  COOKIE_SECRET: z.string().default('dev-cookie'),
+
+  // Kafka / Outbox
+  KAFKA_TOPIC_PREFIX: z.string().default(''),
+  KAFKA_BROKERS: z.string().default('localhost:9094'),
+  KAFKA_CLIENT_ID: z.string().default('booking-api'),
+  KAFKA_SSL: boolLike,
+  KAFKA_SASL_MECH: z.string().optional(),
+  KAFKA_SASL_USER: z.string().optional(),
+  KAFKA_SASL_PASS: z.string().optional(),
+  KAFKA_NUM_PARTITIONS: z.coerce.number().int().positive().default(3),
+  KAFKA_REPLICATION_FACTOR: z.coerce.number().int().positive().default(1),
+  EVENT_TOPICS: z.string().optional(),
+
+  OUTBOX_AUTOSTART: boolLike,
+  OUTBOX_KAFKA: boolLike,
+  OUTBOX_POLL_SEC: z.coerce.number().int().positive().default(5),
+  OUTBOX_BATCH: z.coerce.number().int().positive().default(200),
+  OUTBOX_LOCK_TTL_SEC: z.coerce.number().int().positive().default(10),
+
+  // Throttling
+  THROTTLE_INBOX_SEND_LIMIT: z.coerce.number().int().positive().default(30),
+  THROTTLE_INBOX_SEND_TTL_SEC: z.coerce.number().int().positive().default(60),
+  THROTTLE_TYPING_LIMIT: z.coerce.number().int().positive().default(60),
+  THROTTLE_TYPING_TTL_SEC: z.coerce.number().int().positive().default(60),
 });
 
-export type AppEnv = {
-  nodeEnv: 'development' | 'test' | 'production';
-  port: number;
+export type RawEnv = z.infer<typeof RawEnvSchema>;
 
-  dbUrl: string;
-  shadowDbUrl?: string;
-
-  inventoryTz: string;
-  holdMinutes: number;
-
-  // --- MỚI ---
-  autoDeclineHigh: boolean;
-  reviewHoldDaysDefault: number;
-
-  // fraudDefault?: boolean;
-};
-
-let cached: AppEnv | null = null;
-
-/**
- * Đọc + validate 1 lần, cache kết quả (an toàn để gọi ở bất kỳ service nào).
- */
-export default function env(): AppEnv {
-  if (cached) return cached;
-
-  const parsed = RawEnvSchema.safeParse(process.env);
+export function validateEnv(config: Record<string, unknown>): RawEnv {
+  const parsed = RawEnvSchema.safeParse(config);
   if (!parsed.success) {
-    // In lỗi gọn gàng để dễ debug khi thiếu env
     const pretty = parsed.error.format();
     console.error(
       '❌ Invalid environment variables:',
@@ -66,32 +72,17 @@ export default function env(): AppEnv {
     );
     throw new Error('Invalid environment variables');
   }
+  return parsed.data;
+}
 
-  const e = parsed.data;
+let cached: RawEnv | null = null;
 
-  cached = {
-    nodeEnv: e.NODE_ENV,
-    port: e.PORT,
-
-    dbUrl: e.DATABASE_URL,
-    shadowDbUrl: e.SHADOW_DATABASE_URL,
-
-    inventoryTz: e.INVENTORY_TZ,
-    holdMinutes: e.HOLD_MINUTES,
-
-    // --- MỚI ---
-    autoDeclineHigh: e.AUTO_DECLINE_HIGH,
-    reviewHoldDaysDefault: e.REVIEW_HOLD_DAYS,
-
-    // fraudDefault: e.FRAUD_CHECK_DEFAULT,
-  };
-
+export default function env(): RawEnv {
+  if (cached) return cached;
+  cached = validateEnv(process.env);
   return cached;
 }
 
-/**
- * (Tuỳ chọn) dùng cho unit test để reset cache giữa các test cases.
- */
 export function __resetEnvCacheForTests() {
   cached = null;
 }

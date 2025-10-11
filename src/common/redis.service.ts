@@ -101,7 +101,10 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     if (opts.nx && opts.xx) throw new Error('NX and XX are mutually exclusive');
     if (opts.nx) args.push('NX');
     if (opts.xx) args.push('XX');
-    return this.redis.set(...(args as [string, string, ...any[]])); // 'OK' | null
+    const extraArgs = args
+      .slice(2)
+      .map((arg) => (typeof arg === 'number' ? String(arg) : arg));
+    return this.redis.set(key, value, ...extraArgs); // 'OK' | null
   }
 
   async get(key: string) {

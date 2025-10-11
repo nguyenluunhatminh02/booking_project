@@ -40,7 +40,9 @@ export function loadThumbSpecsFromEnv(): ThumbSpec[] {
         }))
         .filter((x) => x.kind && x.width > 0);
       if (specs.length) return specs;
-    } catch {}
+    } catch (parseErr) {
+      void parseErr;
+    }
   }
   const s = process.env.FILE_THUMBS;
   if (s) {

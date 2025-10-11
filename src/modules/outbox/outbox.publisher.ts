@@ -8,7 +8,9 @@ import {
 import { PrismaService } from '../../prisma/prisma.service';
 import { OUTBOX_PRODUCER } from './outbox.tokens';
 import type { KafkaProducerLike } from './types';
-import { RedisService } from 'src/common/redis.service';
+import { RedisService } from '../../common/redis.service';
+import { topicName } from '../kafka/topicName';
+import { AppConfigService } from '../../config/app-config.service';
 
 @Injectable()
 export class OutboxPublisher implements OnModuleInit, OnModuleDestroy {
@@ -16,21 +18,26 @@ export class OutboxPublisher implements OnModuleInit, OnModuleDestroy {
   private timer?: NodeJS.Timeout;
   private running = false;
 
-  private readonly autostart = (process.env.OUTBOX_AUTOSTART || '0') === '1';
-  private readonly pollSec = Number(process.env.OUTBOX_POLL_SEC || 5);
-  private readonly batch = Number(process.env.OUTBOX_BATCH || 200);
-  private readonly topicPrefix = process.env.KAFKA_TOPIC_PREFIX || '';
+  private readonly autostart: boolean;
+  private readonly pollSec: number;
+  private readonly batch: number;
+  private readonly topicPrefix: string;
+  private readonly lockTtlSec: number;
   private static readonly LOCK_KEY = 'job:outbox:publish';
-  private static readonly LOCK_TTL_SEC = Math.max(
-    1,
-    Number(process.env.OUTBOX_LOCK_TTL_SEC || 10),
-  );
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
     @Inject(OUTBOX_PRODUCER) private readonly producer: KafkaProducerLike,
-  ) {}
+    private readonly config: AppConfigService,
+  ) {
+    const outboxCfg = this.config.outbox;
+    this.autostart = outboxCfg.autostart;
+    this.pollSec = outboxCfg.pollIntervalSec;
+    this.batch = outboxCfg.batchSize;
+    this.topicPrefix = this.config.kafka.topicPrefix;
+    this.lockTtlSec = Math.max(1, outboxCfg.lockTtlSec);
+  }
 
   async onModuleInit() {
     await this.producer.connect();
@@ -55,7 +62,7 @@ export class OutboxPublisher implements OnModuleInit, OnModuleDestroy {
 
   async tick() {
     const got = await this.redis.set(OutboxPublisher.LOCK_KEY, '1', {
-      ttlSec: OutboxPublisher.LOCK_TTL_SEC,
+      ttlSec: this.lockTtlSec,
       nx: true,
     });
     if (!got) return;
@@ -66,13 +73,13 @@ export class OutboxPublisher implements OnModuleInit, OnModuleDestroy {
         try {
           (this.redis as any).expire?.(
             OutboxPublisher.LOCK_KEY,
-            OutboxPublisher.LOCK_TTL_SEC,
+            this.lockTtlSec,
           );
         } catch {
           /* empty */
         }
       },
-      Math.max(1000, (OutboxPublisher.LOCK_TTL_SEC * 1000) / 2),
+      Math.max(1000, (this.lockTtlSec * 1000) / 2),
     );
     (renew as any).unref?.();
 
@@ -92,10 +99,9 @@ export class OutboxPublisher implements OnModuleInit, OnModuleDestroy {
 
       const groups = new Map<string, typeof rows>();
       for (const r of rows) {
-        const t = r.topic;
-        // const t = `${this.topicPrefix}${r.topic}`;
-        if (!groups.has(t)) groups.set(t, []);
-        groups.get(t)!.push(r);
+        const finalTopic = topicName(this.topicPrefix, r.topic);
+        if (!groups.has(finalTopic)) groups.set(finalTopic, []);
+        groups.get(finalTopic)!.push(r);
       }
 
       for (const [topic, msgs] of groups) {

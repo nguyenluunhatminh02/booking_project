@@ -152,7 +152,7 @@ describe('Bookings E2E (happy paths + review + expire)', () => {
     expect(r.body.status).toBe('HOLD');
 
     // TTL ~ holdMinutes (best-effort check)
-    const b = await (prisma as any).booking.findUnique({
+    const bookingRecord = await (prisma as any).booking.findUnique({
       where: { id: r.body.id },
     });
     const expected = addMinutes(t0, (svc as any).cfg.holdMinutes).getTime();
@@ -193,7 +193,7 @@ describe('Bookings E2E (happy paths + review + expire)', () => {
 
     expect(r.body.status).toBe('REVIEW');
 
-    const b = await (prisma as any).booking.findUnique({
+    const bookingRecordAfter = await (prisma as any).booking.findUnique({
       where: { id: r.body.id },
     });
     const expected = addDays(
@@ -235,7 +235,7 @@ describe('Bookings E2E (happy paths + review + expire)', () => {
     // Tạo 1 booking quá hạn bằng cách thao tác trực tiếp mock:
     const past = new Date(Date.now() - 60_000);
     // @ts-ignore
-    const b = await prisma.booking.create({
+    const bookingCreated = await prisma.booking.create({
       data: {
         propertyId: propId,
         customerId: 'u1',

@@ -1,7 +1,6 @@
 import { PassThrough } from 'stream';
 
 class MockPdfPrinter {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   constructor(_fonts: Record<string, unknown>) {}
   createPdfKitDocument(_def: unknown) {
     const s = new PassThrough();

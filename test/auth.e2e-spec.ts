@@ -31,8 +31,6 @@ process.env.REFRESH_GRACE_SEC = '20';
 process.env.DEVICE_APPROVAL_TTL_SEC = '900';
 
 // ============ Tiny helpers ============
-const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
 // ============ In-memory Prisma mock (Auth subset) ============
 class MockPrismaAuth implements Partial<PrismaService> {
   users: any[] = [];
@@ -359,7 +357,6 @@ describe('Auth Module E2E', () => {
   });
 
   let cookies: string[] = [];
-  let accessToken: string = '';
   let userId: string = '';
 
   it('POST /auth/register -> set refresh cookie & return access token (no RT in body)', async () => {

@@ -33,9 +33,11 @@ import { JobsModule } from './modules/job/jobs.module';
 import { OutboxModule } from './modules/outbox/outbox.module';
 import { SagaModule } from './modules/saga/saga.module';
 import { ReviewModule } from './modules/review/review.module';
+import { AppConfigModule } from './config/app-config.module';
 
 @Module({
   imports: [
+    AppConfigModule,
     OutboxModule.register(),
     ScheduleModule.forRoot(),
     PrismaModule,

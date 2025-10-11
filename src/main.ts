@@ -15,6 +15,7 @@ import { GlobalExceptionFilter } from './common/filters/global-exception.filter'
 import { ValidationException } from './common/errors/app.exception';
 import { ValidationError } from 'class-validator';
 import { ensureTopics } from './modules/kafka/ensure-topics';
+import { AppConfigService } from './config/app-config.service';
 // import { CsrfExceptionFilter } from './common/filters/csrf-exception.filter'; // không bắt được EBADCSRFTOKEN
 
 async function bootstrap() {
@@ -24,18 +25,17 @@ async function bootstrap() {
   console.log('Waiting for Kafka to be ready...');
   await new Promise((resolve) => setTimeout(resolve, 5000));
 
+  const config = app.get(AppConfigService);
+
   try {
-    await ensureTopics();
+    await ensureTopics(config.kafka);
   } catch (error) {
     console.error('Failed to ensure topics:', error);
   }
   app.set('trust proxy', 1);
 
   // Cấu hình nguồn FE/API từ env
-  const FE_ORIGINS = (process.env.CORS_ORIGINS || 'http://localhost:5173')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const FE_ORIGINS = config.cors.allowedOrigins;
 
   // Dùng helmet tổng quát + CSP (tránh phần tử rỗng)
   app.use(helmet());
@@ -58,7 +58,7 @@ async function bootstrap() {
 
   app.use(hpp());
   app.use(compression({ threshold: 1024 }));
-  app.use(cookieParser(process.env.COOKIE_SECRET || 'dev-cookie'));
+  app.use(cookieParser(config.cookieSecret));
 
   // Logger
   app.useLogger(app.get(Logger));
@@ -157,7 +157,7 @@ async function bootstrap() {
     new TransformInterceptor({
       customSensitiveFields: ['ssn', 'creditCard'],
       excludePaths: ['/docs', '/swagger'],
-      skipSanitization: process.env.NODE_ENV === 'development',
+      skipSanitization: config.isDevelopment,
     }),
   );
 
@@ -165,6 +165,6 @@ async function bootstrap() {
   // app.useGlobalFilters(new CsrfExceptionFilter()); // không bắt được EBADCSRFTOKEN, có thể bỏ
   app.useGlobalFilters(new GlobalExceptionFilter());
 
-  await app.listen(process.env.PORT ?? 3000);
+  await app.listen(config.port);
 }
-bootstrap();
+void bootstrap();

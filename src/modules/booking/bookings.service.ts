@@ -13,10 +13,10 @@ import {
   subDays,
 } from 'date-fns';
 import { formatInTimeZone, fromZonedTime } from 'date-fns-tz';
-import env from '../../config/env.validation';
 import { FraudService } from '../fraud/fraud.service';
 import { IdempotencyService } from '../idempotency/idempotency.service';
 import { OutboxProducer } from '../outbox/outbox.producer';
+import { AppConfigService } from '../../config/app-config.service';
 
 const TZ = process.env.INVENTORY_TZ || 'Asia/Ho_Chi_Minh';
 const MS_PER_DAY = 86_400_000;
@@ -50,13 +50,12 @@ function refundPercentByRules(daysBefore: number, rules: CancelRule[]): number {
 
 @Injectable()
 export class BookingsService {
-  private cfg = env(); // holdMinutes; reviewHoldDaysDefault; autoDeclineHigh
-
   constructor(
     private prisma: PrismaService,
     private fraud: FraudService,
     private idem: IdempotencyService,
     private outbox: OutboxProducer,
+    private config: AppConfigService,
   ) {}
 
   async hold(
@@ -88,7 +87,8 @@ export class BookingsService {
       checkIn: checkIn.toISOString(),
       checkOut: checkOut.toISOString(),
     };
-    const ttlMs = (this.cfg.holdMinutes + 30) * 60 * 1000;
+    const holdMinutes = this.config.bookingHoldMinutes;
+    const ttlMs = (holdMinutes + 30) * 60 * 1000;
 
     const gate = await this.idem.beginOrReuse({
       userId,
@@ -103,10 +103,9 @@ export class BookingsService {
     const idemId = (gate as any).id;
 
     try {
-      const { booking, fa, wantReview } = await this.prisma.$transaction(
-        async (tx) => {
-          // 1) Lock inventory days
-          const avs = await tx.$queryRaw<any[]>`
+      const transactionResult = await this.prisma.$transaction(async (tx) => {
+        // 1) Lock inventory days
+        const avs = await tx.$queryRaw<any[]>`
             SELECT * FROM "AvailabilityDay"
             WHERE "propertyId" = ${propertyId}
               AND "date" >= ${checkIn}
@@ -114,144 +113,145 @@ export class BookingsService {
             ORDER BY "date" ASC
             FOR UPDATE
           `;
-          const daysRange = eachDayOfInterval({
-            start: checkIn,
-            end: subDays(checkOut, 1),
-          });
-          if (
-            avs.length !== daysRange.length ||
-            avs.some((d) => d.isBlocked || d.remaining <= 0)
-          ) {
-            throw new BadRequestException('Not available');
-          }
+        const daysRange = eachDayOfInterval({
+          start: checkIn,
+          end: subDays(checkOut, 1),
+        });
+        if (
+          avs.length !== daysRange.length ||
+          avs.some((d) => d.isBlocked || d.remaining <= 0)
+        ) {
+          throw new BadRequestException('Not available');
+        }
 
-          // 2) Pricing
-          const totalPrice = avs.reduce((s, a) => s + a.price, 0);
+        // 2) Pricing
+        const totalPrice = avs.reduce((s, a) => s + a.price, 0);
 
-          // 3) Fraud
-          const fa = await this.fraud.assess(userId, totalPrice);
-          const level = fa.level as RiskLevel;
-          const wantReview =
-            !fa.skipped && (level === 'MEDIUM' || level === 'HIGH');
+        // 3) Fraud
+        const fa = await this.fraud.assess(userId, totalPrice);
+        const level = fa.level as RiskLevel;
+        const wantReview =
+          !fa.skipped && (level === 'MEDIUM' || level === 'HIGH');
 
-          // 3.1) Auto-decline HIGH (optional)
-          const autoDeclineHigh = (this.cfg as any).autoDeclineHigh ?? false;
-          if (level === 'HIGH' && autoDeclineHigh) {
-            const booking = await tx.booking.create({
-              data: {
-                propertyId,
-                customerId: userId,
-                checkIn,
-                checkOut,
-                status: 'CANCELLED',
-                holdExpiresAt: null,
-                totalPrice,
-              },
-            });
-            await tx.fraudAssessment.upsert({
-              where: { bookingId: booking.id },
-              update: {
-                score: fa.score,
-                level: fa.level as any,
-                reasons: fa.reasons as any,
-                decision: 'AUTO_DECLINED',
-              },
-              create: {
-                bookingId: booking.id,
-                userId,
-                score: fa.score,
-                level: fa.level as any,
-                decision: 'AUTO_DECLINED',
-                reasons: fa.reasons as any,
-              },
-            });
-
-            await this.outbox.emitInTx(
-              tx,
-              'booking.auto_declined',
-              `booking.auto_declined:${booking.id}`,
-              { bookingId: booking.id },
-            );
-
-            return { booking, fa, wantReview: false as const };
-          }
-
-          // 4) Decrement inventory by id
-          for (const a of avs) {
-            const affected = await tx.$executeRaw`
-              UPDATE "AvailabilityDay"
-                 SET "remaining" = "remaining" - 1
-               WHERE "id" = ${a.id}
-                 AND "isBlocked" = false
-                 AND "remaining" > 0
-            `;
-            if (Number(affected) !== 1) {
-              throw new BadRequestException('Race condition on inventory');
-            }
-          }
-
-          // 5) Booking
-          const reviewDays = (this.cfg as any).reviewHoldDaysDefault ?? 1;
-          const holdExpiry = wantReview
-            ? addDays(new Date(), reviewDays)
-            : addMinutes(new Date(), this.cfg.holdMinutes);
-
-          const status: BookingStatus = wantReview ? 'REVIEW' : 'HOLD';
+        // 3.1) Auto-decline HIGH (optional)
+        const autoDeclineHigh = this.config.autoDeclineHighRisk;
+        if (level === 'HIGH' && autoDeclineHigh) {
           const booking = await tx.booking.create({
             data: {
               propertyId,
               customerId: userId,
               checkIn,
               checkOut,
-              status,
-              holdExpiresAt: holdExpiry,
-              reviewDeadlineAt: wantReview ? holdExpiry : null,
+              status: 'CANCELLED',
+              holdExpiresAt: null,
               totalPrice,
             },
           });
+          await tx.fraudAssessment.upsert({
+            where: { bookingId: booking.id },
+            update: {
+              score: fa.score,
+              level: fa.level as any,
+              reasons: fa.reasons as any,
+              decision: 'AUTO_DECLINED',
+            },
+            create: {
+              bookingId: booking.id,
+              userId,
+              score: fa.score,
+              level: fa.level as any,
+              decision: 'AUTO_DECLINED',
+              reasons: fa.reasons as any,
+            },
+          });
 
-          // 6) FraudAssessment nếu REVIEW
-          if (wantReview) {
-            await tx.fraudAssessment.upsert({
-              where: { bookingId: booking.id },
-              update: {
-                score: fa.score,
-                level: fa.level as any,
-                reasons: fa.reasons as any,
-                decision: 'PENDING',
-              },
-              create: {
-                bookingId: booking.id,
-                userId,
-                score: fa.score,
-                level: fa.level as any,
-                decision: 'PENDING',
-                reasons: fa.reasons as any,
-              },
-            });
-          }
-
-          // 7) Outbox
           await this.outbox.emitInTx(
             tx,
-            'booking.held',
-            `booking.held:${booking.id}`,
-            {
-              bookingId: booking.id,
-            },
+            'booking.auto_declined',
+            `booking.auto_declined:${booking.id}`,
+            { bookingId: booking.id },
           );
-          if (wantReview) {
-            await this.outbox.emitInTx(
-              tx,
-              'booking.review_pending',
-              `booking.review_pending:${booking.id}`,
-              { bookingId: booking.id },
-            );
-          }
 
-          return { booking, fa, wantReview };
-        },
-      );
+          return { booking, fa, wantReview: false as const };
+        }
+
+        // 4) Decrement inventory by id
+        for (const a of avs) {
+          const affected = await tx.$executeRaw`
+              UPDATE "AvailabilityDay"
+                 SET "remaining" = "remaining" - 1
+               WHERE "id" = ${a.id}
+                 AND "isBlocked" = false
+                 AND "remaining" > 0
+            `;
+          if (Number(affected) !== 1) {
+            throw new BadRequestException('Race condition on inventory');
+          }
+        }
+
+        // 5) Booking
+        const reviewDays = this.config.reviewHoldDays;
+        const holdExpiry = wantReview
+          ? addDays(new Date(), reviewDays)
+          : addMinutes(new Date(), holdMinutes);
+
+        const status: BookingStatus = wantReview ? 'REVIEW' : 'HOLD';
+        const booking = await tx.booking.create({
+          data: {
+            propertyId,
+            customerId: userId,
+            checkIn,
+            checkOut,
+            status,
+            holdExpiresAt: holdExpiry,
+            reviewDeadlineAt: wantReview ? holdExpiry : null,
+            totalPrice,
+          },
+        });
+
+        // 6) FraudAssessment nếu REVIEW
+        if (wantReview) {
+          await tx.fraudAssessment.upsert({
+            where: { bookingId: booking.id },
+            update: {
+              score: fa.score,
+              level: fa.level as any,
+              reasons: fa.reasons as any,
+              decision: 'PENDING',
+            },
+            create: {
+              bookingId: booking.id,
+              userId,
+              score: fa.score,
+              level: fa.level as any,
+              decision: 'PENDING',
+              reasons: fa.reasons as any,
+            },
+          });
+        }
+
+        // 7) Outbox
+        await this.outbox.emitInTx(
+          tx,
+          'booking.held',
+          `booking.held:${booking.id}`,
+          {
+            bookingId: booking.id,
+          },
+        );
+        if (wantReview) {
+          await this.outbox.emitInTx(
+            tx,
+            'booking.review_pending',
+            `booking.review_pending:${booking.id}`,
+            { bookingId: booking.id },
+          );
+        }
+
+        return { booking, fa, wantReview };
+      });
+
+      const { booking, fa } = transactionResult;
 
       const response = {
         id: booking.id,

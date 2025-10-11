@@ -38,6 +38,15 @@ export class MinioService implements OnModuleInit {
 
   publicPrefix = trimSuffix(process.env.MINIO_PUBLIC_URL_PREFIX, '/');
 
+  private readonly bootstrapAtStartup =
+    (process.env.MINIO_BOOTSTRAP ?? (process.env.NODE_ENV === 'production' ? '1' : '0')) ===
+    '1';
+
+  private readonly bootstrapTimeoutMs = Math.max(
+    1_000,
+    Number(process.env.MINIO_BOOTSTRAP_TIMEOUT_MS || 5_000),
+  );
+
   async onModuleInit() {
     this.client = new Minio.Client({
       endPoint: this.endPoint,
@@ -46,11 +55,36 @@ export class MinioService implements OnModuleInit {
       accessKey: this.accessKey,
       secretKey: this.secretKey,
     });
-    try {
-      await this.ensureBucket();
-    } catch (e) {
-      this.logger.warn(`ensureBucket failed: ${String(e?.message || e)}`);
+
+    if (!this.bootstrapAtStartup) {
+      this.logger.log('MINIO_BOOTSTRAP!=1 → skip ensureBucket on startup');
+      return;
     }
+
+    try {
+      await this.ensureBucketSafe();
+    } catch (e) {
+      this.logger.warn(
+        `ensureBucket skipped (MinIO unavailable?): ${String(e?.message || e)}`,
+      );
+    }
+  }
+
+  get bootstrapEnabled(): boolean {
+    return this.bootstrapAtStartup;
+  }
+
+  async ensureBucketSafe(timeoutMs = this.bootstrapTimeoutMs) {
+    const ensurePromise = this.ensureBucket();
+    await Promise.race([
+      ensurePromise,
+      new Promise<never>((_, reject) => {
+        const timer = setTimeout(() => {
+          reject(new Error(`MinIO ensureBucket timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+        ensurePromise.finally(() => clearTimeout(timer));
+      }),
+    ]);
   }
 
   async ensureBucket() {

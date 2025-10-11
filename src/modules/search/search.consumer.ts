@@ -26,6 +26,11 @@ export class SearchConsumer implements OnModuleInit, OnModuleDestroy {
   constructor(private readonly indexer: SearchIndexerService) {}
 
   async onModuleInit() {
+    if (process.env.SEARCH_CONSUMER_ENABLED !== '1') {
+      this.logger.log('SEARCH_CONSUMER_ENABLED!=1 → skip consumer startup');
+      return;
+    }
+
     const brokers = (process.env.KAFKA_BROKERS || 'localhost:9092')
       .split(',')
       .map((s) => s.trim())
@@ -33,25 +38,34 @@ export class SearchConsumer implements OnModuleInit, OnModuleDestroy {
     const groupId = process.env.SEARCH_CONSUMER_GROUP || 'search-indexer';
     const prefix = process.env.KAFKA_TOPIC_PREFIX || 'dev.';
 
-    this.kafka = new Kafka({ brokers, logLevel: logLevel.ERROR });
-    this.consumer = this.kafka.consumer({ groupId });
+    try {
+      this.kafka = new Kafka({ brokers, logLevel: logLevel.ERROR });
+      this.consumer = this.kafka.consumer({ groupId });
 
-    await this.consumer.connect();
-    for (const t of TOPICS.map((t) => `${prefix}${t}`)) {
-      await this.consumer.subscribe({ topic: t, fromBeginning: false });
+      await this.consumer.connect();
+      for (const t of TOPICS.map((t) => `${prefix}${t}`)) {
+        await this.consumer.subscribe({ topic: t, fromBeginning: false });
+      }
+
+      await this.consumer.run({
+        eachMessage: async ({ topic, message }) => {
+          try {
+            await this.handle(topic, message);
+          } catch (e: any) {
+            this.logger.error(`search-consumer error: ${e?.message || e}`);
+          }
+        },
+      });
+
+      this.logger.log(`SearchConsumer subscribed: ${TOPICS.join(', ')}`);
+    } catch (error: any) {
+      this.logger.warn(
+        `SearchConsumer disabled (Kafka unavailable): ${error?.message || error}`,
+      );
+      await this.consumer?.disconnect().catch(() => {});
+      this.consumer = undefined;
+      this.kafka = undefined;
     }
-
-    await this.consumer.run({
-      eachMessage: async ({ topic, message }) => {
-        try {
-          await this.handle(topic, message);
-        } catch (e: any) {
-          this.logger.error(`search-consumer error: ${e?.message || e}`);
-        }
-      },
-    });
-
-    this.logger.log(`SearchConsumer subscribed: ${TOPICS.join(', ')}`);
   }
 
   async onModuleDestroy() {

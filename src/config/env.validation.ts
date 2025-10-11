@@ -11,7 +11,12 @@ const RawEnvSchema = z.object({
     .default('development'),
   PORT: z.coerce.number().int().positive().default(3000),
 
-  DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
+  DATABASE_URL: z
+    .string()
+    .min(1, 'DATABASE_URL is required')
+    .default(
+      'postgresql://postgres:postgres@localhost:5433/booking?schema=public',
+    ),
   SHADOW_DATABASE_URL: z.string().min(1).optional(),
 
   // Timezone để bucket lịch/booking
@@ -68,6 +73,10 @@ export default function env(): AppEnv {
   }
 
   const e = parsed.data;
+
+  if (!process.env.DATABASE_URL) {
+    process.env.DATABASE_URL = e.DATABASE_URL;
+  }
 
   cached = {
     nodeEnv: e.NODE_ENV,

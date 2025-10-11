@@ -21,13 +21,18 @@ async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     bufferLogs: true,
   });
-  console.log('Waiting for Kafka to be ready...');
-  await new Promise((resolve) => setTimeout(resolve, 5000));
 
-  try {
-    await ensureTopics();
-  } catch (error) {
-    console.error('Failed to ensure topics:', error);
+  if (process.env.KAFKA_BOOTSTRAP === '1') {
+    console.log('Waiting for Kafka to be ready...');
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+
+    try {
+      await ensureTopics();
+    } catch (error) {
+      console.error('Failed to ensure topics:', error);
+    }
+  } else {
+    console.log('Skipping Kafka topic check (KAFKA_BOOTSTRAP!=1)');
   }
   app.set('trust proxy', 1);
 
@@ -165,6 +170,9 @@ async function bootstrap() {
   // app.useGlobalFilters(new CsrfExceptionFilter()); // không bắt được EBADCSRFTOKEN, có thể bỏ
   app.useGlobalFilters(new GlobalExceptionFilter());
 
-  await app.listen(process.env.PORT ?? 3000);
+  const port = process.env.PORT ?? 3000;
+  console.log('Starting Nest HTTP listener...');
+  await app.listen(port);
+  console.log(`🚀 Booking API is running on http://localhost:${port}`);
 }
 bootstrap();

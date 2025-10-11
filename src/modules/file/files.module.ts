@@ -11,8 +11,9 @@ import { OutboxProducer } from '../outbox/outbox.producer';
 class MinioBootstrap implements OnModuleInit {
   constructor(private minio: MinioService) {}
   async onModuleInit() {
+    if (!this.minio.bootstrapEnabled) return;
     // Đảm bảo bucket tồn tại (không throw để không chặn boot)
-    await this.minio.ensureBucket().catch(() => undefined);
+    await this.minio.ensureBucketSafe().catch(() => undefined);
   }
 }
 

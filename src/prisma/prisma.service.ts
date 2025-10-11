@@ -12,8 +12,17 @@ export class PrismaService extends PrismaClient implements OnModuleInit {
   prisma = new PrismaClient();
 
   async onModuleInit() {
-    await this.$connect();
-    // this.prisma.
+    try {
+      await this.$connect();
+    } catch (error) {
+      if (process.env.NODE_ENV === 'production') {
+        throw error;
+      }
+      console.warn(
+        'Prisma connection skipped (database unavailable):',
+        (error as Error)?.message ?? error,
+      );
+    }
   }
 
   async onModuleDestroy() {

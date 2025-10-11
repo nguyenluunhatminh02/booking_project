@@ -67,7 +67,7 @@ export class MessagingController {
 
   @Post('conversations/:id/messages')
   @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
-  @Throttle(30, 60) // 30 msg/phút/user (bật ThrottlerModule ở AppModule)
+  @Throttle({ default: { limit: 30, ttl: 60 } }) // 30 msg/phút/user (bật ThrottlerModule ở AppModule)
   sendMessage(
     @Req() req: any,
     @Param('id') id: string,
@@ -127,7 +127,7 @@ export class MessagingController {
 
   // ---- Typing indicator ----
   @Post('conversations/:id/typing')
-  @Throttle(60, 60) // 60 hit/phút/user
+  @Throttle({ default: { limit: 60, ttl: 60 } }) // 60 hit/phút/user
   typing(
     @Req() req: any,
     @Param('id') id: string,

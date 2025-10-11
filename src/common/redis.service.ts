@@ -64,13 +64,16 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     if (this.redis && this.redis.status === 'wait') {
       await this.redis.connect().catch(() => undefined);
     }
+    if (!this.redis || this.redis.status !== 'ready') {
+      this.log.log('Redis not ready at bootstrap → skip script preload');
+      return;
+    }
     // Preload Lua script (tùy chọn, sẽ tự eval nếu chưa load)
     try {
-      if (this.redis)
-        this.unlockSha = (await this.redis.script(
-          'LOAD',
-          this.UNLOCK_LUA,
-        )) as string;
+      this.unlockSha = (await this.redis.script(
+        'LOAD',
+        this.UNLOCK_LUA,
+      )) as string;
     } catch {
       /* empty */
     }

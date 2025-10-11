@@ -1,6 +1,7 @@
 import {
   Controller,
   Get,
+  Head,
   Header,
   ServiceUnavailableException,
 } from '@nestjs/common';
@@ -28,6 +29,25 @@ export class HealthController {
   @Public()
   @Header('Cache-Control', 'no-store')
   async ready() {
+    const checks = await this.collectChecks();
+    return this.assertHealthy(checks);
+  }
+
+  @Get()
+  @Head()
+  @Public()
+  @Header('Cache-Control', 'no-store')
+  async health() {
+    const checks = await this.collectChecks();
+    const healthy = this.isHealthy(checks);
+    return { status: healthy ? 'healthy' : 'unhealthy', checks };
+  }
+
+  private async collectChecks(): Promise<{
+    database: boolean;
+    redis: boolean;
+    timestamp: string;
+  }> {
     const checks = {
       database: false,
       redis: false,
@@ -53,7 +73,23 @@ export class HealthController {
       /* redis down */
     }
 
-    const healthy = checks.database && checks.redis;
+    return checks;
+  }
+
+  private isHealthy(checks: {
+    database: boolean;
+    redis: boolean;
+    timestamp: string;
+  }) {
+    return checks.database && checks.redis;
+  }
+
+  private assertHealthy(checks: {
+    database: boolean;
+    redis: boolean;
+    timestamp: string;
+  }) {
+    const healthy = this.isHealthy(checks);
     if (!healthy) {
       throw new ServiceUnavailableException({ status: 'unhealthy', checks });
     }

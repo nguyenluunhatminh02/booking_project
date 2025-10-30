@@ -26,6 +26,7 @@ export class MockPrismaBookings {
   public availability = new Map<string, AvailabilityDay>();
   public bookings: any[] = [];
   public payments: any[] = [];
+  public refunds: any[] = [];
   public fraudAssessments: any[] = [];
   public cancelPolicies: any[] = [];
   public outboxEvents: Array<{ topic: string; payload: any; createdAt: Date }> =
@@ -404,6 +405,39 @@ export class MockPrismaBookings {
         count++;
       }
       return { count };
+    },
+    update: async ({ where: { id }, data }: any) => {
+      const row = this.payments.find((p) => p.id === id);
+      if (!row) return null;
+      if (data?.status !== undefined) row.status = data.status;
+      if (data?.refundAmount !== undefined)
+        row.refundAmount = data.refundAmount;
+      if (data?.refundExternalId !== undefined)
+        row.refundExternalId = data.refundExternalId;
+      row.updatedAt = new Date();
+      return this.clone(row);
+    },
+  };
+
+  // ───────────────────────── Refund (tối giản) ─────────────────────────
+  refund = {
+    create: async ({ data }: any) => {
+      const row = {
+        id: this.nextId('ref'),
+        paymentId: data.paymentId,
+        amount: data.amount,
+        status: data.status ?? 'PENDING',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      this.refunds.push(row);
+      return this.clone(row);
+    },
+    findMany: async ({ where }: any) => {
+      let res = this.refunds.slice();
+      if (where?.paymentId)
+        res = res.filter((r) => r.paymentId === where.paymentId);
+      return this.clone(res);
     },
   };
 

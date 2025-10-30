@@ -9,6 +9,9 @@ import { DashboardPage } from '@/pages/DashboardPage';
 import { PropertiesListPage } from '@/pages/properties/PropertiesListPage';
 import { PropertyDetailPage } from '@/pages/properties/PropertyDetailPage';
 import { BookingHoldPage } from '@/pages/bookings/BookingHoldPage';
+import { BookingsToolsPage } from '@/pages/bookings/BookingsToolsPage';
+import { MyBookingsPage } from '@/pages/bookings/MyBookingsPage';
+import { BookingDetailPage } from '@/pages/bookings/BookingDetailPage';
 import { ReviewManagerPage } from '@/pages/reviews/ReviewManagerPage';
 import { InvoiceToolsPage } from '@/pages/invoices/InvoiceToolsPage';
 
@@ -28,7 +31,10 @@ function App() {
               <Route path="/dashboard" element={<DashboardPage />} />
               <Route path="/properties" element={<PropertiesListPage />} />
               <Route path="/properties/:id" element={<PropertyDetailPage />} />
+              <Route path="/bookings" element={<MyBookingsPage />} />
+              <Route path="/bookings/:id" element={<BookingDetailPage />} />
               <Route path="/bookings/hold" element={<BookingHoldPage />} />
+              <Route path="/bookings/tools" element={<BookingsToolsPage />} />
               <Route path="/reviews" element={<ReviewManagerPage />} />
               <Route path="/invoices" element={<InvoiceToolsPage />} />
             </Route>

@@ -27,6 +27,47 @@ async function bootstrap() {
 
   const config = app.get(AppConfigService);
 
+  // Optional: initialize Sentry for error monitoring if configured
+  if (process.env.SENTRY_DSN) {
+    try {
+      const SentryModule = await import('@sentry/node');
+      // support both CJS and ESM default exports
+      const Sentry: any =
+        (SentryModule && (SentryModule as any).default) || SentryModule;
+
+      Sentry.init({
+        dsn: process.env.SENTRY_DSN,
+        environment: config.nodeEnv ?? process.env.NODE_ENV,
+        tracesSampleRate: Number(process.env.SENTRY_TRACES_SAMPLE_RATE ?? '0'),
+      });
+
+      // Expose the initialized Sentry instance on global so other modules can
+      // capture without importing @sentry/node directly (keeps optional dependency).
+      (global as any).__SENTRY__ = Sentry;
+
+      // If Sentry provides the Express handlers, register the request handler
+      // early so Sentry attaches request context to subsequent events.
+      try {
+        if (
+          Sentry &&
+          Sentry.Handlers &&
+          typeof Sentry.Handlers.requestHandler === 'function'
+        ) {
+          app.use(Sentry.Handlers.requestHandler());
+        }
+      } catch {
+        // ignore if handlers not available
+      }
+
+      console.log('Sentry initialized');
+    } catch (err) {
+      console.warn(
+        'Sentry not initialized (package missing or init error):',
+        err,
+      );
+    }
+  }
+
   try {
     await ensureTopics(config.kafka);
   } catch (error) {

@@ -377,14 +377,50 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       ip: request.ip,
       userId: (request as any).user?.id,
     };
-
     if (error.statusCode >= 500) {
-      // Server errors - log as error with full details
-      this.logger.error(
-        `${error.code}: ${error.message}`,
-        exception instanceof Error ? exception.stack : undefined,
-        logContext,
-      );
+      // Server errors - log as error. Include stack only in non-production to avoid leaking stack traces.
+      if (process.env.NODE_ENV === 'production') {
+        this.logger.error(
+          `${error.code}: ${error.message}`,
+          undefined,
+          logContext,
+        );
+      } else {
+        this.logger.error(
+          `${error.code}: ${error.message}`,
+          exception instanceof Error ? exception.stack : undefined,
+          logContext,
+        );
+      }
+
+      // Capture to Sentry (optional) so on-call can be alerted. We rely on the
+      // Sentry instance initialized in main.ts and exposed on global to avoid
+      // importing @sentry/node here (keeps it optional for environments that
+      // don't install the package).
+      const Sentry: any = (global as any).__SENTRY__;
+      if (Sentry && process.env.SENTRY_DSN) {
+        try {
+          Sentry.withScope((scope) => {
+            if (error.requestId) scope.setTag('requestId', error.requestId);
+            scope.setTag('path', error.path);
+            scope.setTag('method', error.method);
+            scope.setTag('statusCode', String(error.statusCode));
+            scope.setExtras({
+              ip: request.ip,
+              userAgent: request.headers['user-agent'],
+              requestId: error.requestId,
+              userId: (request as any).user?.id,
+            });
+            Sentry.captureException(
+              exception instanceof Error
+                ? exception
+                : new Error(JSON.stringify(exception)),
+            );
+          });
+        } catch {
+          // ignore any errors coming from the Sentry capture itself
+        }
+      }
     } else if (error.statusCode >= 400) {
       // Client errors - log as warning
       this.logger.warn(`${error.code}: ${error.message}`, logContext);

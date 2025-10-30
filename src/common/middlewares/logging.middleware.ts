@@ -2,6 +2,7 @@
 
 import { Injectable, NestMiddleware } from '@nestjs/common';
 import { NextFunction, Request, Response } from 'express';
+import { PinoLogger } from 'nestjs-pino';
 
 const SENSITIVE_KEYS = [
   'password',
@@ -42,20 +43,23 @@ function maskObj(value: unknown, depth = 0): unknown {
 
 @Injectable()
 export class LoggingMiddleware implements NestMiddleware {
+  constructor(private readonly logger: PinoLogger) {}
+
   use(req: Request, _res: Response, next: NextFunction) {
     try {
       const safeBody = maskObj(req.body ?? {});
       const safeQuery = maskObj(req.query ?? {});
       const rawHeaders = req.headers ?? {};
+      const maskedHeaders = maskObj(rawHeaders) as Record<string, unknown>;
       const safeHeaders: Record<string, unknown> = {
-        ...maskObj(rawHeaders),
+        ...maskedHeaders,
         authorization: rawHeaders.authorization ? '[REDACTED]' : undefined,
         cookie: rawHeaders.cookie ? '[REDACTED]' : undefined,
       };
 
-      // Dùng logger chuẩn nếu có (pino/winston). Ở đây demo console:
-      console.log(
-        JSON.stringify({
+      // Use structured logger (pino) so logs are consistent with LoggerModule
+      this.logger.info(
+        {
           msg: 'HTTP_REQUEST',
           method: req.method,
           url: req.originalUrl ?? req.url,
@@ -63,7 +67,8 @@ export class LoggingMiddleware implements NestMiddleware {
           headers: safeHeaders,
           body: safeBody,
           query: safeQuery,
-        }),
+        },
+        'HTTP_REQUEST',
       );
     } catch {
       /* ignore */

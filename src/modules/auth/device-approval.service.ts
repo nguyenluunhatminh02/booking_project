@@ -1,3 +1,4 @@
+// src/modules/auth/device-approval.service.ts
 import {
   BadRequestException,
   Injectable,

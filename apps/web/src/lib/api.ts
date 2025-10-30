@@ -2,6 +2,7 @@ import axios, {
   AxiosError,
   InternalAxiosRequestConfig,
   AxiosResponse,
+  AxiosHeaders,
 } from 'axios';
 import { getAuthToken, setAuthToken } from './auth-store';
 
@@ -77,18 +78,14 @@ api.interceptors.request.use(async (config) => {
   }
 
   if (needsCsrf(method) && csrfToken) {
-    config.headers = {
-      ...config.headers,
-      [CSRF_HEADER]: csrfToken,
-    };
+    // Use AxiosHeaders helper so we don't assign a raw object to the
+    // axios headers type (which may be AxiosHeaders in newer axios types).
+    config.headers = new AxiosHeaders(config.headers).set(CSRF_HEADER, csrfToken);
   }
 
   const token = getAuthToken();
   if (token) {
-    config.headers = {
-      ...config.headers,
-      Authorization: `Bearer ${token}`,
-    };
+    config.headers = new AxiosHeaders(config.headers).set('Authorization', `Bearer ${token}`);
   }
 
   return config;
@@ -109,10 +106,10 @@ api.interceptors.response.use(
       try {
         const newToken = await refreshAccessToken();
         if (newToken) {
-          mutableConfig.headers = {
-            ...mutableConfig.headers,
-            Authorization: `Bearer ${newToken}`,
-          };
+          mutableConfig.headers = new AxiosHeaders(mutableConfig.headers).set(
+            'Authorization',
+            `Bearer ${newToken}`,
+          );
           return api(mutableConfig);
         }
       } catch {

@@ -1,4 +1,4 @@
-import { FormEvent, useMemo, useState } from 'react';
+import { FormEvent, useMemo, useState, ChangeEvent } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { api, toApiError } from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
@@ -35,9 +35,11 @@ function generateIdempotencyKey() {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+type FormState = { propertyId: string; checkIn: string; checkOut: string };
+
 export function BookingHoldPage() {
   const { user } = useAuth();
-  const [formState, setFormState] = useState({
+  const [formState, setFormState] = useState<FormState>({
     propertyId: '',
     checkIn: '',
     checkOut: '',
@@ -105,6 +107,24 @@ export function BookingHoldPage() {
     holdMutation.mutate(formState);
   };
 
+  const cancelMutation = useMutation({
+    mutationFn: async (bookingId: string) => {
+      if (!user?.id) throw new Error('Login required');
+      const { data } = await api.post(`/bookings/${bookingId}/cancel`, {
+        userId: user.id,
+      });
+      return data;
+    },
+    onSuccess: () => {
+      // best-effort: refetch or mark result cancelled locally
+      if (result) setResult({ ...result, status: 'CANCELLED' });
+      setError(null);
+    },
+    onError: (err) => {
+      setError(toApiError(err).message);
+    },
+  });
+
   const propertyOptions = useMemo(
     () => propertiesQuery.data ?? [],
     [propertiesQuery.data],
@@ -136,8 +156,8 @@ export function BookingHoldPage() {
                 id="propertyId"
                 required
                 value={formState.propertyId}
-                onChange={(event) =>
-                  setFormState((prev) => ({
+                onChange={(event: ChangeEvent<HTMLSelectElement>) =>
+                  setFormState((prev: FormState) => ({
                     ...prev,
                     propertyId: event.target.value,
                   }))
@@ -145,7 +165,7 @@ export function BookingHoldPage() {
                 className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
               >
                 <option value="">Select property</option>
-                {propertyOptions.map((option) => (
+                {propertyOptions.map((option: PropertyOption) => (
                   <option key={option.id} value={option.id}>
                     {option.title}
                   </option>
@@ -159,8 +179,8 @@ export function BookingHoldPage() {
                 type="date"
                 required
                 value={formState.checkIn}
-                onChange={(event) =>
-                  setFormState((prev) => ({
+                onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                  setFormState((prev: FormState) => ({
                     ...prev,
                     checkIn: event.target.value,
                   }))
@@ -174,8 +194,8 @@ export function BookingHoldPage() {
                 type="date"
                 required
                 value={formState.checkOut}
-                onChange={(event) =>
-                  setFormState((prev) => ({
+                onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                  setFormState((prev: FormState) => ({
                     ...prev,
                     checkOut: event.target.value,
                   }))
@@ -222,18 +242,34 @@ export function BookingHoldPage() {
               <div>
                 <p className="font-medium">Fraud assessment</p>
                 <p>
-                  Level: <span className="capitalize">{result.fraud.level}</span>{' '}
-                  · Score: {result.fraud.score}
+                  Level:{' '}
+                  <span className="capitalize">{result.fraud.level}</span> ·
+                  Score: {result.fraud.score}
                 </p>
                 {result.fraud.reasons.length ? (
                   <ul className="mt-1 list-disc pl-4 text-muted-foreground">
-                    {result.fraud.reasons.map((reason) => (
+                    {result.fraud.reasons.map((reason: string) => (
                       <li key={reason}>{reason}</li>
                     ))}
                   </ul>
                 ) : null}
               </div>
             ) : null}
+            <div className="pt-2">
+              {result.status !== 'CANCELLED' ? (
+                <Button
+                  variant="destructive"
+                  onClick={() => cancelMutation.mutate(result.id)}
+                  disabled={cancelMutation.isPending}
+                >
+                  {cancelMutation.isPending ? 'Cancelling…' : 'Cancel hold'}
+                </Button>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  This hold is cancelled.
+                </p>
+              )}
+            </div>
           </CardContent>
         </Card>
       ) : null}

@@ -3,10 +3,14 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
 
+import { ToastProvider } from '@/lib/toast';
+
 const NAV_ITEMS = [
   { to: '/dashboard', label: 'Dashboard' },
   { to: '/properties', label: 'Properties' },
+  { to: '/bookings', label: 'My bookings' },
   { to: '/bookings/hold', label: 'Booking Hold' },
+  { to: '/bookings/tools', label: 'Booking Tools' },
   { to: '/reviews', label: 'Reviews' },
   { to: '/invoices', label: 'Invoices' },
 ];
@@ -48,7 +52,9 @@ export function AppLayout() {
         </div>
       </header>
       <main className="mx-auto w-full max-w-6xl px-6 py-8">
-        <Outlet />
+        <ToastProvider>
+          <Outlet />
+        </ToastProvider>
       </main>
     </div>
   );

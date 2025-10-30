@@ -169,6 +169,23 @@ export class BookingsController {
     return this.bookings.previewRefund(bookingId, d);
   }
 
+  /**
+   * Get a single booking detail
+   */
+  @Get(':bookingId')
+  async getBooking(@Param('bookingId') bookingId: string) {
+    const b = await this.prisma.booking.findUnique({
+      where: { id: bookingId },
+      include: {
+        property: { select: { id: true, title: true } },
+        fraudAssessment: true,
+        payment: true,
+      },
+    });
+    if (!b) throw new BadRequestException('Booking not found');
+    return b;
+  }
+
   /** Hết hạn các HOLD/REVIEW (quét batch 200) */
   @Post('expire-holds')
   async expireHolds(@Query('now') now?: string) {
@@ -177,6 +194,20 @@ export class BookingsController {
       throw new BadRequestException('now must be ISO date string');
     }
     return this.bookings.expireHolds(d);
+  }
+
+  /**
+   * List bookings belonging to the current user (X-User-Id header required)
+   */
+  @Get('my')
+  async myBookings(@Headers('x-user-id') userId: string) {
+    if (!userId) throw new BadRequestException('X-User-Id header required');
+    const rows = await this.prisma.booking.findMany({
+      where: { customerId: userId },
+      orderBy: { checkIn: 'desc' },
+      include: { property: { select: { id: true, title: true } } },
+    });
+    return rows;
   }
 
   /** Khách tự huỷ HOLD/REVIEW */

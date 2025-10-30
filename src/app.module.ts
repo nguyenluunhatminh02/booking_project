@@ -3,7 +3,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { PrismaModule } from './prisma/prisma.module';
 import { AuthModule } from './modules/auth/auth.module';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { RateLimitGuard } from './common/guards/rate-limit.guard';
 import { TokenBucketService } from './common/token-bucket.service';
 import { RedisService } from './common/redis.service';
@@ -17,6 +17,7 @@ import { CsrfController } from './common/controllers/csrf.controller';
 import { CsrfMiddleware } from './common/middlewares/csrf.middleware';
 import { HealthController } from './modules/health/health.controller';
 import { DeviceFingerprintMiddleware } from './common/middlewares/finger-print.middleware';
+import { LoggingMiddleware } from './common/middlewares/logging.middleware';
 import { DeviceFingerprintService } from './common/finger-print.service';
 import { MailerModule } from './modules/mailer/mailer.module';
 import { PropertyModule } from './modules/property/property.module';
@@ -34,6 +35,7 @@ import { OutboxModule } from './modules/outbox/outbox.module';
 import { SagaModule } from './modules/saga/saga.module';
 import { ReviewModule } from './modules/review/review.module';
 import { AppConfigModule } from './config/app-config.module';
+import { ErrorInterceptor } from './common/transforms/error.interceptor';
 
 @Module({
   imports: [
@@ -69,13 +71,17 @@ import { AppConfigModule } from './config/app-config.module';
     RedisService,
     FeatureFlagsService,
     DeviceFingerprintService,
+    LoggingMiddleware,
     { provide: APP_GUARD, useClass: RateLimitGuard },
+    { provide: APP_INTERCEPTOR, useClass: ErrorInterceptor },
   ],
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
     consumer
       .apply(RequestContextMiddleware)
+      .forRoutes('*')
+      .apply(LoggingMiddleware)
       .forRoutes('*')
       .apply(XssMiddleware)
       .forRoutes('*')

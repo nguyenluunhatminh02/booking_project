@@ -1,3 +1,4 @@
+// src/modules/auth/token-state.service.ts
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { RedisService } from '../../common/redis.service';
 import { PrismaService } from './../../prisma/prisma.service';

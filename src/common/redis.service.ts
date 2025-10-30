@@ -94,7 +94,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   }
 
   // -------- Core KV --------
-  async set(key: string, value: string, opts: SetOpts = {}) {
+  set(key: string, value: string, opts: SetOpts = {}) {
     if (!this.redis) return null;
     const args: (string | number)[] = [key, value];
     if (opts.ttlSec && opts.ttlSec > 0) args.push('EX', opts.ttlSec);
@@ -104,7 +104,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     const extraArgs = args
       .slice(2)
       .map((arg) => (typeof arg === 'number' ? String(arg) : arg));
-    return this.redis.set(key, value, ...extraArgs); // 'OK' | null
+    return (this.redis as any).set(key, value, ...extraArgs); // 'OK' | null
   }
 
   async get(key: string) {

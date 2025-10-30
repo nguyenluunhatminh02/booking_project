@@ -59,8 +59,11 @@ async function buildKafkaProducer(
   return {
     connect: () => producer.connect(),
     disconnect: () => producer.disconnect(),
-    send: (topic: string, messages: KafkaMessageInput[]) =>
-      producer.send({ topic, messages }),
+    send: async (topic: string, messages: KafkaMessageInput[]) => {
+      await producer.send({ topic, messages });
+      // intentionally return void to match KafkaProducerLike
+      return undefined;
+    },
   };
 }
 
